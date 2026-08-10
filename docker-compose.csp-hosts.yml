@@ -1,0 +1,12 @@
+# Optional overlay. Make includes this file only when both
+# APP_SDWAN_CSP_HOSTNAME and APP_SDWAN_CSP_HOST_IP are set in .env.
+# Used for closed CSP stands where the TLS hostname has no public DNS.
+
+services:
+  streamlit:
+    extra_hosts:
+      - "${APP_SDWAN_CSP_HOSTNAME}:${APP_SDWAN_CSP_HOST_IP}"
+
+  app:
+    extra_hosts:
+      - "${APP_SDWAN_CSP_HOSTNAME}:${APP_SDWAN_CSP_HOST_IP}"

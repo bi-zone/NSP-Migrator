@@ -1,0 +1,93 @@
+# Prod-like base stack. Local development adds docker-compose.local.yml.
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE in .env}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${APP_DB_USER:?Set APP_DB_USER in .env}
+      POSTGRES_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
+      POSTGRES_DB: ${APP_DB_NAME:?Set APP_DB_NAME in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  streamlit:
+    image: policy-migrator-streamlit:runtime
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: streamlit
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:?Set PYTHON_IMAGE in .env}
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${STREAMLIT_HOST_PORT:-8501}:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./client_cert.pem:/app/client_cert.pem:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:8501/_stcore/health || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  # FastAPI is kept for the planned API migration, but is not started by
+  # default while Streamlit remains the primary application.
+  app:
+    profiles:
+      - api
+    image: policy-migrator-api:runtime
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:?Set PYTHON_IMAGE in .env}
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./client_cert.pem:/app/client_cert.pem:ro
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+
+networks:
+  internal:
+    driver: bridge

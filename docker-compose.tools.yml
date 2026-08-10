@@ -1,0 +1,28 @@
+# Isolated development tools. It intentionally does not load .env or mount
+# client_cert.pem, so linting and tests do not depend on runtime credentials.
+
+name: policy-migrator-tools
+
+services:
+  tools:
+    image: policy-migrator-streamlit:dev
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: streamlit-dev
+    working_dir: /app
+    environment:
+      HOME: /tmp
+      MYPY_CACHE_DIR: /tmp/mypy-cache
+      PYTEST_ADDOPTS: "-o cache_dir=/tmp/pytest-cache"
+      RUFF_CACHE_DIR: /tmp/ruff-cache
+      XDG_CACHE_HOME: /tmp/cache
+      PYTHONPATH: /app/src
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./docs:/app/docs:ro
+      - ./migrations:/app/migrations
+      - ./scripts:/app/scripts
+      - ./alembic.ini:/app/alembic.ini:ro

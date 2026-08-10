@@ -1,0 +1,44 @@
+:root {
+  --pm-primary: #0068c9;
+  --pm-sidebar-bg: #f8f9fa;
+  --pm-dropzone-bg: #3b3f46;
+}
+
+section[data-testid="stSidebar"] {
+  background: var(--pm-sidebar-bg);
+}
+
+.username-box {
+  border: 1px solid #d8dadd;
+  border-radius: 6px;
+  background: #ffffff;
+  text-align: center;
+  font-weight: 600;
+  padding: 10px 12px;
+  margin: 6px 2px 14px 2px;
+}
+
+section[data-testid="stSidebar"] [aria-current="page"] {
+  background: var(--pm-primary);
+  color: #ffffff !important;
+  border-radius: 6px;
+}
+
+.dropzone-title {
+  font-weight: 600;
+  margin-top: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+[data-testid="stFileUploaderDropzone"] {
+  border: 1px dashed #8f96a3;
+  background: var(--pm-dropzone-bg);
+  color: #ffffff;
+  min-height: 96px;
+}
+
+[data-testid="stFileUploaderDropzone"] small,
+[data-testid="stFileUploaderDropzone"] span,
+[data-testid="stFileUploaderDropzone"] p {
+  color: #ffffff !important;
+}

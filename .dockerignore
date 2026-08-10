@@ -1,0 +1,59 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Local secrets and credentials. These are injected by Compose at runtime.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments and package/build output
+.venv/
+venv/
+env/
+ENV/
+__pypackages__/
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling and editor state
+.idea/
+.vscode/
+.cursor/
+.agents/
+.codex/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local artifacts and generated documentation
+local_samples/
+docs/_build/
+site/
+*.log
+*.tmp
+
+# Docker metadata is not needed inside images
+docker-compose*.yml
+compose*.yml
+.dockerignore

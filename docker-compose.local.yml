@@ -1,0 +1,34 @@
+# Local development overrides for the prod-like base stack.
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+
+  streamlit:
+    image: policy-migrator-streamlit:dev
+    pull_policy: build
+    build:
+      target: streamlit-dev
+    volumes:
+      - ./src/app:/app/src/app
+      - ./src/streamlit_app:/app/src/streamlit_app
+      - ./migrations:/app/migrations
+      - ./tests:/app/tests
+      - ./docs:/app/docs:ro
+      - ./scripts:/app/scripts
+      - ./client_cert.pem:/app/client_cert.pem:ro
+
+  app:
+    image: policy-migrator-api:dev
+    pull_policy: build
+    build:
+      target: api-dev
+    volumes:
+      - ./src/app:/app/src/app
+      - ./src/streamlit_app:/app/src/streamlit_app
+      - ./migrations:/app/migrations
+      - ./tests:/app/tests
+      - ./docs:/app/docs:ro
+      - ./scripts:/app/scripts
+      - ./client_cert.pem:/app/client_cert.pem:ro
