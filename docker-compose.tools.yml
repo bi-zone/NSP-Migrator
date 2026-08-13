@@ -11,6 +11,8 @@ services:
       context: .
       dockerfile: Dockerfile
       target: streamlit-dev
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:?set PYTHON_IMAGE in .env}
     working_dir: /app
     environment:
       HOME: /tmp
@@ -19,6 +21,7 @@ services:
       RUFF_CACHE_DIR: /tmp/ruff-cache
       XDG_CACHE_HOME: /tmp/cache
       PYTHONPATH: /app/src
+      APP_TEST_DB_HOST: host.docker.internal
     volumes:
       - ./src:/app/src
       - ./tests:/app/tests

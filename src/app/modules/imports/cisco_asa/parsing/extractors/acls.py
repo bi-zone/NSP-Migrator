@@ -90,7 +90,9 @@ class ExtendedAclExtractor:
             dst_ref, next_idx = self._parse_endpoint(endpoint_tokens, next_idx)
             tail = endpoint_tokens[next_idx:]
 
-            service_ref = self._extract_service_ref(operand, tail)
+            service_ref = operand.service_ref or self._extract_service_ref(
+                operand, tail
+            )
 
             enabled = not mods.inactive
             zone_resolutions = (

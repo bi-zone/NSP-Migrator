@@ -106,27 +106,47 @@ class AddressExtractor:
         """
         results: list[ParsedAddressObject] = []
 
-        for name, node_idx in index.object_network.items():
-            node = tree.nodes[node_idx]
-            children = [c.line.stripped for c in tree.children(node_idx)]
+        for name, node_indices in index.object_network.items():
+            declarations = [
+                (
+                    node_idx,
+                    _parse_object_network_children(
+                        [c.line.stripped for c in tree.children(node_idx)]
+                    ),
+                )
+                for node_idx in node_indices
+            ]
+            node_idx, payload = next(
+                (
+                    declaration
+                    for declaration in reversed(declarations)
+                    if declaration[1].get("type") is not None
+                ),
+                declarations[-1],
+            )
+            source_span = tree.source_span(node_idx)
             results.append(
                 ParsedAddressObject(
                     name=name,
                     kind=ParsedObjectType.ADDRESS,
-                    payload=_parse_object_network_children(children),
-                    source_line=node.line.line_no,
+                    payload=payload,
+                    source_line=source_span.line_start,
+                    source_line_end=source_span.line_end,
+                    source_fragment=source_span.fragment,
                 )
             )
 
         for name, node_idx in index.object_group_network.items():
-            node = tree.nodes[node_idx]
+            source_span = tree.source_span(node_idx)
             children = [c.line.stripped for c in tree.children(node_idx)]
             results.append(
                 ParsedAddressObject(
                     name=name,
                     kind=ParsedObjectType.ADDRESS_GROUP,
                     payload=_parse_object_group_network_children(children),
-                    source_line=node.line.line_no,
+                    source_line=source_span.line_start,
+                    source_line_end=source_span.line_end,
+                    source_fragment=source_span.fragment,
                 )
             )
 

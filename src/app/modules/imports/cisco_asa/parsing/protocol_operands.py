@@ -28,13 +28,14 @@ _KNOWN_LITERAL_PROTOCOLS = frozenset(
 class ParsedProtocolOperand:
     """Structured protocol field from one ACL line.
 
-    Copied onto ParsedAccessRule as protocol_operand_kind,
+    Copied onto ParsedAccessRule as protocol_operand_kind, service_ref,
     protocol_group_ref, and protocol_number by ExtendedAclExtractor.
     """
 
     kind: ProtocolOperandKind
     protocol: str
     group_ref: str | None = None
+    service_ref: str | None = None
     protocol_number: int | None = None
 
 
@@ -46,8 +47,8 @@ def parse_protocol_operand(
     Args:
         proto_token: Protocol field from the access-list line (e.g. tcp,
             object-group, 6).
-        rest_tokens: Remaining tokens after protocol — for object-group the
-            first token is consumed as group_ref.
+        rest_tokens: Remaining tokens after protocol. The first token is
+            consumed as a reference for object and object-group operands.
 
     Returns:
         Tuple of (operand, remaining_tokens) where remaining_tokens are
@@ -55,6 +56,7 @@ def parse_protocol_operand(
 
     Classification rules:
     - object-group [NAME] -> PROTOCOL_GROUP (group_ref may be None)
+    - object [NAME] -> SERVICE_OBJECT (service_ref may be None)
     - 0–255 decimal -> IP_PROTOCOL_NUMBER
     - known ASA protocol names -> LITERAL
     - other all-digit tokens -> IP_PROTOCOL_NUMBER (including out-of-range;
@@ -79,6 +81,26 @@ def parse_protocol_operand(
                 kind=ProtocolOperandKind.PROTOCOL_GROUP,
                 protocol="protocol-group",
                 group_ref=group_ref,
+            ),
+            rest_tokens[1:],
+        )
+
+    if lowered == "object":
+        if not rest_tokens:
+            return (
+                ParsedProtocolOperand(
+                    kind=ProtocolOperandKind.SERVICE_OBJECT,
+                    protocol="service-object",
+                    service_ref=None,
+                ),
+                rest_tokens,
+            )
+        service_ref = rest_tokens[0]
+        return (
+            ParsedProtocolOperand(
+                kind=ProtocolOperandKind.SERVICE_OBJECT,
+                protocol="service-object",
+                service_ref=service_ref,
             ),
             rest_tokens[1:],
         )

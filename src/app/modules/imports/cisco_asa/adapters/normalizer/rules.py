@@ -9,7 +9,7 @@ from app.modules.canonical.domain import (
     OperandRole,
 )
 from app.modules.imports.cisco_asa.adapters.normalizer.rules_helpers import (
-    append_service_operand_trace,
+    append_service_operands_with_trace,
     emit_rule_zone_issues,
     emit_textual_duplicate_issue,
     validate_protocol_operand,
@@ -228,11 +228,11 @@ class _RuleNormalizationMixin:
                 canonical_rule_id=canonical_rule.id,
                 state=state,
             )
-            service_obj_id = self._ensure_service_for_rule(rule, state)
-            append_service_operand_trace(
+            service_obj_ids = self._ensure_services_for_rule(rule, state)
+            append_service_operands_with_trace(
                 rule=rule,
                 canonical_rule_id=canonical_rule.id,
-                service_obj_id=service_obj_id,
+                service_obj_ids=service_obj_ids,
                 state=state,
             )
 

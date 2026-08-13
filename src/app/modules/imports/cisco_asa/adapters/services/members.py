@@ -9,6 +9,7 @@ from app.modules.imports.cisco_asa.adapters.services.builders import (
     build_canonical_service_from_payload,
     build_ip_protocol_service,
     parse_port_object_line,
+    resolve_l4_destination_range,
 )
 from app.modules.imports.cisco_asa.adapters.services.common import (
     _ICMP_NAME_TO_TYPE,
@@ -21,7 +22,7 @@ from app.modules.imports.cisco_asa.parsing.service_members import (
 )
 
 
-def _register_service_payload(  # noqa: C901
+def _register_service_payload(
     payload: dict,
     *,
     canonical_snapshot_id: UUID,
@@ -45,15 +46,11 @@ def _register_service_payload(  # noqa: C901
     if not proto:
         return None
 
-    if (
-        proto in {"tcp", "udp"}
-        and payload.get("op") == "eq"
-        and payload.get("port") is not None
-    ):
-        port = parse_port_token(str(payload["port"]))
-        if port is None:
+    if proto in {"tcp", "udp"}:
+        port_range = resolve_l4_destination_range(payload)
+        if port_range is None:
             return None
-        obj_key = service_object_key(proto, port, port)
+        obj_key = service_object_key(proto, port_range[0], port_range[1])
     elif (
         proto == "tcp-udp"
         and payload.get("op") == "eq"
@@ -63,12 +60,6 @@ def _register_service_payload(  # noqa: C901
         if port is None:
             return None
         obj_key = f"service:tcp-udp:{port}-{port}"
-    elif proto in {"tcp", "udp"} and payload.get("op") == "range":
-        p_from = parse_port_token(str(payload.get("port_from")))
-        p_to = parse_port_token(str(payload.get("port_to")))
-        if p_from is None or p_to is None:
-            return None
-        obj_key = service_object_key(proto, p_from, p_to)
     elif proto in {"icmp", "icmp6"}:
         icmp = (payload.get("icmp") or "any").lower().replace(" ", "-")
         obj_key = f"service:{proto}:icmp-{icmp}"
@@ -187,24 +178,30 @@ def materialize_service_group_member(  # noqa: C901
         proto = parsed["protocol"]
         if parsed.get("op") == "eq":
             port = int(parsed["port"])
-            obj_key = service_object_key(proto, port, port)
+            p_from = port
+            p_to = port
         else:
-            p_from = parse_port_token(str(parsed["port_from"]))
-            p_to = parse_port_token(str(parsed["port_to"]))
+            p_from = parse_port_token(str(parsed["port_from"]))  # type: ignore
+            p_to = parse_port_token(str(parsed["port_to"]))  # type: ignore
             if p_from is None or p_to is None:
                 return []
-            obj_key = service_object_key(proto, p_from, p_to)
-        if obj_key not in objects_by_key:
-            built = build_canonical_service_from_payload(
-                canonical_snapshot_id=canonical_snapshot_id,
-                name=obj_key.removeprefix("service:"),
-                object_key=obj_key,
-                payload=parsed,
-            )
-            if built is None:
-                return []
-            register(built)
-        return [obj_key]
+
+        protocols = ("tcp", "udp") if proto == "tcp-udp" else (proto,)
+        child_keys: list[str] = []
+        for child_protocol in protocols:
+            obj_key = service_object_key(child_protocol, p_from, p_to)
+            if obj_key not in objects_by_key:
+                built = build_canonical_service_from_payload(
+                    canonical_snapshot_id=canonical_snapshot_id,
+                    name=obj_key.removeprefix("service:"),
+                    object_key=obj_key,
+                    payload={**parsed, "protocol": child_protocol},
+                )
+                if built is None:
+                    return []
+                register(built)
+            child_keys.append(obj_key)
+        return child_keys
 
     if mtype == "service-object":
         payload = member.get("payload")

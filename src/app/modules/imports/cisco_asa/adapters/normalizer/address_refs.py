@@ -59,15 +59,19 @@ def ensure_subnet_ref(
 ) -> UUID:
     """Resolve ACL net: ref into canonical object id, creating object on demand.
 
-    Invalid subnet masks are intentionally downgraded to addr:any fallback to
-    preserve import continuity and avoid hard-failing the full snapshot.
+    Invalid subnet masks are represented as unresolved address objects so
+    downstream mapping cannot widen them to addr:any.
     """
     body = ref.removeprefix("net:")
     ip_str, mask = body.split("/", 1)
     prefix = _mask_to_prefix(mask)
     if prefix is None:
-        # Invalid mask is treated as non-fatal parsing debt at operand level.
-        return state.objects_by_key["addr:any"].object_id
+        return ensure_unresolved_ref(
+            ref=ref,
+            source_line=source_line,
+            role=role,
+            state=state,
+        )
     cidr = f"{ip_str}/{prefix}"
     key = f"addr:net:{cidr}"
     if key not in state.objects_by_key:
@@ -113,7 +117,7 @@ def ensure_unresolved_ref(
         canonical_snapshot_id=state.canonical_snapshot_id,
         object_key=unresolved_key,
         object_family=ObjectFamily.ADDR,
-        object_kind=ObjectKind.ANY_ADDR,
+        object_kind=ObjectKind.UNRESOLVED_ADDR,
         name=ref,
         description="unresolved ASA address reference",
     )
@@ -197,6 +201,29 @@ def resolve_subnet_member(
     return key
 
 
+def resolve_unresolved_member(
+    *,
+    ref: str,
+    canonical_snapshot_id: UUID,
+    objects_by_key: dict[str, _ObjectRef],
+    register: Callable[[CanonicalObject], CanonicalObject],
+) -> str:
+    """Create/reuse an unresolved address leaf for a group member."""
+    key = f"addr:unresolved:{ref}"
+    if key not in objects_by_key:
+        register(
+            CanonicalObject.create(
+                canonical_snapshot_id=canonical_snapshot_id,
+                object_key=key,
+                object_family=ObjectFamily.ADDR,
+                object_kind=ObjectKind.UNRESOLVED_ADDR,
+                name=ref,
+                description="unresolved ASA address group member",
+            )
+        )
+    return key
+
+
 def resolve_member_ref(
     ref: str,
     canonical_snapshot_id: UUID,
@@ -217,7 +244,13 @@ def resolve_member_ref(
         )
 
     if ref.startswith("net:"):
-        return resolve_subnet_member(
+        resolved_key = resolve_subnet_member(
+            ref=ref,
+            canonical_snapshot_id=canonical_snapshot_id,
+            objects_by_key=objects_by_key,
+            register=register,
+        )
+        return resolved_key or resolve_unresolved_member(
             ref=ref,
             canonical_snapshot_id=canonical_snapshot_id,
             objects_by_key=objects_by_key,
@@ -225,4 +258,11 @@ def resolve_member_ref(
         )
 
     named_key = f"addr:{ref}"
-    return named_key if named_key in objects_by_key else None
+    if named_key in objects_by_key:
+        return named_key
+    return resolve_unresolved_member(
+        ref=ref,
+        canonical_snapshot_id=canonical_snapshot_id,
+        objects_by_key=objects_by_key,
+        register=register,
+    )

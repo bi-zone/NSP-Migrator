@@ -15,8 +15,79 @@ from app.modules.imports.cisco_asa.parsing.service_catalog import (
     parse_port_token,
 )
 
+_MIN_PORT = 0
+_MAX_PORT = 65535
 
-def build_canonical_service_from_payload(  # noqa: C901
+
+def resolve_l4_destination_range(payload: dict) -> tuple[int, int] | None:
+    """Resolve an exactly representable TCP/UDP destination port constraint.
+
+    An absent constraint represents the full ``0..65535`` range. Destination
+    ``eq``, ``range``, ``lt`` and ``gt`` operators are converted to one closed
+    range. ``None`` is returned for source-port constraints, ``neq`` (which
+    requires two ranges), malformed payloads and out-of-bounds values.
+    """
+
+    if payload.get("source_op") is not None or payload.get("raw") is not None:
+        return None
+
+    operator = payload.get("destination_op", payload.get("op"))
+    port_value = payload.get("destination_port", payload.get("port"))
+    port_from_value = payload.get("destination_port_from", payload.get("port_from"))
+    port_to_value = payload.get("destination_port_to", payload.get("port_to"))
+
+    if operator is None:
+        if any(
+            value is not None for value in (port_value, port_from_value, port_to_value)
+        ):
+            return None
+        return _MIN_PORT, _MAX_PORT
+
+    if operator == "range":
+        port_from = parse_port_token(str(port_from_value))
+        port_to = parse_port_token(str(port_to_value))
+        if (
+            port_from is None
+            or port_to is None
+            or not _MIN_PORT <= port_from <= port_to <= _MAX_PORT
+        ):
+            return None
+        return port_from, port_to
+
+    port = parse_port_token(str(port_value))
+    if port is None or not _MIN_PORT <= port <= _MAX_PORT:
+        return None
+
+    if operator == "eq":
+        return port, port
+    if operator == "lt" and port > _MIN_PORT:
+        return _MIN_PORT, port - 1
+    if operator == "gt" and port < _MAX_PORT:
+        return port + 1, _MAX_PORT
+
+    return None
+
+
+def _build_unresolved_l4_service(
+    *,
+    canonical_snapshot_id: UUID,
+    name: str,
+    object_key: str,
+    protocol: str,
+    description: str | None,
+) -> CanonicalObject:
+    return CanonicalObject.create(
+        canonical_snapshot_id=canonical_snapshot_id,
+        object_key=object_key,
+        object_family=ObjectFamily.SERVICE,
+        object_kind=ObjectKind.UNRESOLVED_SERVICE,
+        name=name,
+        protocol=protocol,
+        description=description,
+    )
+
+
+def build_canonical_service_from_payload(
     *,
     canonical_snapshot_id: UUID,
     name: str,
@@ -33,8 +104,10 @@ def build_canonical_service_from_payload(  # noqa: C901
     treat that as "could not materialize" (skip member edge or use header
     fallback).
 
-    Supported shapes include tcp/udp eq/range, tcp-udp eq expansion, icmp,
-    ip/esp/ah/gre, and numeric IP protocol identifiers.
+    Supported shapes include protocol-wide TCP/UDP, exactly representable
+    destination port constraints, TCP-UDP eq expansion, ICMP, IP-level
+    protocols, and numeric IP protocol identifiers. TCP/UDP constraints that
+    cannot be represented exactly become UNRESOLVED_SERVICE objects.
     """
     proto = (payload.get("protocol") or "").lower()
     if not proto:
@@ -61,40 +134,27 @@ def build_canonical_service_from_payload(  # noqa: C901
         )
 
     if proto in {"tcp", "udp"}:
-        op = payload.get("op")
-        if op == "eq" and payload.get("port") is not None:
-            port = parse_port_token(str(payload["port"]))
-            if port is None:
-                return None
-            kind = kind_for_protocol(proto)
-            return CanonicalObject.create(
+        port_range = resolve_l4_destination_range(payload)
+        if port_range is None:
+            return _build_unresolved_l4_service(
                 canonical_snapshot_id=canonical_snapshot_id,
-                object_key=object_key,
-                object_family=ObjectFamily.SERVICE,
-                object_kind=kind,
                 name=name,
+                object_key=object_key,
                 protocol=proto,
-                port_from=port,
-                port_to=port,
                 description=payload.get("description"),
             )
-        if op == "range" and payload.get("port_from") is not None:
-            p_from = parse_port_token(str(payload["port_from"]))
-            p_to = parse_port_token(str(payload["port_to"]))
-            if p_from is None or p_to is None:
-                return None
-            kind = kind_for_protocol(proto)
-            return CanonicalObject.create(
-                canonical_snapshot_id=canonical_snapshot_id,
-                object_key=object_key,
-                object_family=ObjectFamily.SERVICE,
-                object_kind=kind,
-                name=name,
-                protocol=proto,
-                port_from=p_from,
-                port_to=p_to,
-                description=payload.get("description"),
-            )
+
+        return CanonicalObject.create(
+            canonical_snapshot_id=canonical_snapshot_id,
+            object_key=object_key,
+            object_family=ObjectFamily.SERVICE,
+            object_kind=kind_for_protocol(proto),
+            name=name,
+            protocol=proto,
+            port_from=port_range[0],
+            port_to=port_range[1],
+            description=payload.get("description"),
+        )
 
     if proto in {"icmp", "icmp6"}:
         icmp_name = (payload.get("icmp") or "").lower().replace(" ", "-")

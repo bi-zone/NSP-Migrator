@@ -59,12 +59,12 @@ def _addr_object_from_payload(
     Called from _AddressNormalizationMixin._materialize_address_objects for
     non-group address headers already parsed by the ASA adapter.
 
-    Unknown payload['type'] values fall back to ObjectKind.ANY_ADDR so
-    import continues rather than failing the snapshot.
+    Unknown payload['type'] values become UNRESOLVED_ADDR so import continues
+    without widening the object to an address wildcard.
 
     Note:
-        Invalid subnet masks here produce {ip}/0 CIDR. ACL operand subnet
-        refs use a different fallback path in ensure_subnet_ref (addr:any).
+        Invalid subnet masks become UNRESOLVED_ADDR. ACL operand subnet refs
+        use the same unresolved semantics in ensure_subnet_ref.
     """
     kind = payload.get("type")
 
@@ -84,7 +84,16 @@ def _addr_object_from_payload(
         ip = payload["ip"]
         mask = payload["mask"]
         prefix = _mask_to_prefix(mask)
-        cidr = f"{ip}/{prefix}" if prefix is not None else f"{ip}/0"
+        if prefix is None:
+            return CanonicalObject.create(
+                canonical_snapshot_id=canonical_snapshot_id,
+                object_key=object_key,
+                object_family=ObjectFamily.ADDR,
+                object_kind=ObjectKind.UNRESOLVED_ADDR,
+                name=name,
+                description=f"invalid ASA subnet mask: {ip} {mask}",
+            )
+        cidr = f"{ip}/{prefix}"
         return CanonicalObject.create(
             canonical_snapshot_id=canonical_snapshot_id,
             object_key=object_key,
@@ -124,8 +133,9 @@ def _addr_object_from_payload(
         canonical_snapshot_id=canonical_snapshot_id,
         object_key=object_key,
         object_family=ObjectFamily.ADDR,
-        object_kind=ObjectKind.ANY_ADDR,
+        object_kind=ObjectKind.UNRESOLVED_ADDR,
         name=name,
+        description="unsupported ASA address object payload",
     )
 
 

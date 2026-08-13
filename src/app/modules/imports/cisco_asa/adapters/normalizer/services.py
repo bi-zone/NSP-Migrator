@@ -14,9 +14,11 @@ from app.modules.imports.cisco_asa.adapters.normalizer.service_group_helpers imp
 )
 from app.modules.imports.cisco_asa.adapters.normalizer.state import _NormalizerState
 from app.modules.imports.cisco_asa.adapters.services.facade import (
+    build_canonical_service_from_payload,
     build_inline_service_from_ref,
     build_ip_protocol_service,
     canonical_object_for_parsed_service,
+    ip_protocol_object_key,
     materialize_service_group_member,
 )
 from app.modules.imports.cisco_asa.domain.enums import (
@@ -63,23 +65,6 @@ class _ServiceNormalizationMixin:
             note=note,
         )
 
-    @staticmethod
-    def _service_trace_fragment(
-        kind: ParsedObjectType, name: str, payload: dict
-    ) -> str:
-        """Reconstruct ASA source fragment for service object header traces.
-
-        Called from _materialize_service_objects so trace records mirror
-        the original object service / object-group stanza wording.
-        """
-        if kind == ParsedObjectType.SERVICE_GROUP:
-            if payload.get("group_kind") == "icmp-type":
-                return f"object-group icmp-type {name}"
-            return f"object-group service {name}"
-        if kind == ParsedObjectType.PROTOCOL_GROUP:
-            return f"object-group protocol {name}"
-        return f"object service {name}"
-
     def _materialize_service_objects(
         self, parsed: ParsedConfig, state: _NormalizerState
     ) -> None:
@@ -98,15 +83,12 @@ class _ServiceNormalizationMixin:
                 svc_item=svc_item,
             )
             state.register(obj)
-            fragment = self._service_trace_fragment(
-                svc_item.kind, svc_item.name, svc_item.payload
-            )
             state.emit_trace(
                 line_start=svc_item.source_line,
-                line_end=svc_item.source_line,
+                line_end=svc_item.source_line_end,
                 canonical_kind=TraceCanonicalKind.OBJECT,
                 canonical_id=obj.id,
-                source_fragment=fragment,
+                source_fragment=svc_item.source_fragment,
                 canonical_role=TraceCanonicalRole.HEADER.value,
             )
 
@@ -222,14 +204,61 @@ class _ServiceNormalizationMixin:
                 state=state,
             )
 
+    def _ensure_services_for_rule(
+        self, rule: ParsedAccessRule, state: _NormalizerState
+    ) -> list[UUID]:
+        """Resolve the effective canonical service objects for one ACL rule.
+
+        Most rules resolve to the single object returned by
+        ``_ensure_service_for_rule``. When a TCP or UDP ACL references an ASA
+        ``tcp-udp`` service group, the group remains intact in the canonical
+        catalog but the rule receives only direct leaf members matching the ACL
+        protocol. This preserves strict ASA protocol semantics without creating
+        synthetic protocol-specific groups.
+
+        A malformed ``tcp-udp`` group with no matching leaf is represented by
+        one unresolved service object; it is never widened to ANY.
+        """
+        service_id = self._ensure_service_for_rule(rule, state)
+        service = state.objects_by_id[service_id]
+
+        if not (
+            service.object_kind == ObjectKind.SERVICE_GROUP
+            and service.protocol == "tcp-udp"
+            and rule.protocol in {"tcp", "udp"}
+        ):
+            return [service_id]
+
+        selected_ids: list[UUID] = []
+        seen_ids: set[UUID] = set()
+        for member in state.object_members:
+            if member.parent_object_id != service_id:
+                continue
+            child = state.objects_by_id[member.child_object_id]
+            if child.protocol != rule.protocol or child.id in seen_ids:
+                continue
+            selected_ids.append(child.id)
+            seen_ids.add(child.id)
+
+        if selected_ids:
+            return selected_ids
+
+        unresolved_id = self._ensure_unresolved_service_object(
+            ref=f"{service.name}:{rule.protocol}",
+            protocol=rule.protocol,
+            source_line=rule.line_start,
+            state=state,
+        )
+        return [unresolved_id]
+
     def _ensure_service_for_rule(
         self, rule: ParsedAccessRule, state: _NormalizerState
     ) -> UUID:
         """Resolve the service object id for one ACL rule operand.
 
-        Called from _RuleNormalizationMixin._materialize_rules before
-        append_service_operand_trace. Branches on rule.protocol_operand_kind
-        to pick numeric protocol, protocol-group, or literal service resolution.
+        Called by _ensure_services_for_rule. Branches on
+        rule.protocol_operand_kind to pick numeric protocol, protocol-group,
+        service-object, or literal service resolution.
 
         Returns:
             Canonical service object id (may be sentinel service:any or
@@ -237,6 +266,14 @@ class _ServiceNormalizationMixin:
         """
         if rule.protocol_operand_kind == ProtocolOperandKind.IP_PROTOCOL_NUMBER:
             return self._ensure_ip_protocol_service(rule, state)
+
+        if rule.protocol_operand_kind == ProtocolOperandKind.SERVICE_OBJECT:
+            return self._ensure_service_object_from_ref(
+                "ip",
+                rule.service_ref,
+                source_line=rule.line_start,
+                state=state,
+            )
 
         if rule.protocol_operand_kind == ProtocolOperandKind.PROTOCOL_GROUP:
             if rule.service_ref:
@@ -372,7 +409,9 @@ class _ServiceNormalizationMixin:
         )
 
     @staticmethod
-    def _lookup_named_service_ref(ref: str | None, state: _NormalizerState) -> UUID | None:
+    def _lookup_named_service_ref(
+        ref: str | None, state: _NormalizerState
+    ) -> UUID | None:
         """Look up pre-materialized service object by service:{ref} key."""
         if not ref:
             return None
@@ -390,23 +429,27 @@ class _ServiceNormalizationMixin:
     ) -> UUID:
         """Return default service when ACL operand has no port/service ref.
 
-        For protocol=ip materializes an implicit IP service object instead
-        of the permissive service:any sentinel. Other protocols reuse
-        service:any registered in _register_sentinel_objects.
+        Materializes an implicit protocol-only service object so rules such
+        as permit icmp any any retain ICMP semantics instead of becoming
+        the permissive service:any sentinel. Protocol-wide TCP/UDP services
+        are represented by the complete ``0..65535`` destination-port range.
         """
-        if protocol != "ip":
+        normalized_protocol = protocol.lower()
+        built = build_canonical_service_from_payload(
+            canonical_snapshot_id=state.canonical_snapshot_id,
+            name=normalized_protocol,
+            object_key=ip_protocol_object_key(normalized_protocol),
+            payload={"protocol": normalized_protocol},
+        )
+        if built is None:
             return state.objects_by_key["service:any"].object_id
 
-        built = build_ip_protocol_service(
-            canonical_snapshot_id=state.canonical_snapshot_id,
-            protocol_name="ip",
-        )
         built = state.register(built)
         self._emit_service_object_trace(
             source_line=source_line,
             object_id=built.id,
-            source_fragment="ip",
-            note="implicit ip protocol service for ACL rule",
+            source_fragment=normalized_protocol,
+            note="implicit protocol-only service for ACL rule",
             state=state,
         )
         return built.id

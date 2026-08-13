@@ -17,6 +17,9 @@ class ProtocolOperandKind(StrEnum):
     PROTOCOL_GROUP = "protocol_group"
     """Operand references an object-group protocol — may include port/service ref."""
 
+    SERVICE_OBJECT = "service_object"
+    """Operand references a named service object in the ACL protocol slot."""
+
     IP_PROTOCOL_NUMBER = "ip_protocol_number"
     """Numeric IP protocol (permit 6 …) — materialized via build_ip_protocol_service."""
 

@@ -25,13 +25,16 @@ class ParsedAddressObject:
 
     payload holds vendor-specific body fields (type, ip, mask,
     members, …) consumed by _addr_object_from_payload and group member
-    wiring in the address normalizer mixin.
+    wiring in the address normalizer mixin. source_line/source_line_end and
+    source_fragment preserve the complete configuration stanza for trace.
     """
 
     name: str
     kind: ParsedObjectType
     payload: dict
     source_line: int
+    source_line_end: int
+    source_fragment: str
 
 
 @dataclass(slots=True)
@@ -41,13 +44,15 @@ class ParsedServiceObject:
     Protocol groups are stored in ParsedConfig.service_objects alongside
     service groups (see ProtocolGroupExtractor). payload includes
     members, protocol, group_kind, etc. for builders.py and
-    members.py.
+    members.py. Source metadata preserves the complete configuration stanza.
     """
 
     name: str
     kind: ParsedObjectType
     payload: dict
     source_line: int
+    source_line_end: int
+    source_fragment: str
 
 
 @dataclass(slots=True)

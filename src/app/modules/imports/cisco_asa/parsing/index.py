@@ -16,11 +16,13 @@ _CRYPTO_MAP_MATCH_RE = re.compile(
 class AsaIndex:
     """Name->node index built from a parsed ASA config tree.
 
-    Dict values are ConfigNode.idx positions into tree.nodes. Extractors
-    use tree.nodes[idx] and tree.children(idx) to read object bodies.
+    Dict values identify ConfigNode.idx positions in tree.nodes. Network
+    objects keep a list of positions; the remaining maps keep one position.
+    Extractors use these indices to read object bodies.
 
-    Duplicate object names overwrite earlier entries (last header wins) — ASA
-    configs with redefined names are not diagnosed here.
+    Repeated object network declarations are preserved because ASA configs may
+    reopen an existing network object to attach NAT settings in a separate
+    stanza. Other duplicate object headers retain last-header-wins semantics.
 
     Attributes:
         object_network: object network NAME headers.
@@ -34,7 +36,7 @@ class AsaIndex:
             (supports multiple links per ACL).
     """
 
-    object_network: dict[str, int]
+    object_network: dict[str, list[int]]
     object_group_network: dict[str, int]
     object_service: dict[str, int]
     object_group_service: dict[str, int]
@@ -53,7 +55,7 @@ class AsaIndex:
         Side Effects:
             None — returns a new AsaIndex instance.
         """
-        object_network: dict[str, int] = {}
+        object_network: dict[str, list[int]] = {}
         object_group_network: dict[str, int] = {}
         object_service: dict[str, int] = {}
         object_group_service: dict[str, int] = {}
@@ -78,7 +80,7 @@ class AsaIndex:
 
             if low.startswith("object network "):
                 name = s.split(maxsplit=2)[2].strip()
-                object_network[name] = node.idx
+                object_network.setdefault(name, []).append(node.idx)
                 continue
 
             if low.startswith("object-group network "):

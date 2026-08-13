@@ -32,6 +32,15 @@ class ConfigNode:
     children: list[int]
 
 
+@dataclass(frozen=True, slots=True)
+class ConfigSourceSpan:
+    """Exact source range and text for one configuration stanza."""
+
+    line_start: int
+    line_end: int
+    fragment: str
+
+
 @dataclass(slots=True)
 class ConfigTree:
     """Parent/child graph over parsed ASA configuration lines.
@@ -48,6 +57,24 @@ class ConfigTree:
         ProtocolGroupExtractor to collect indented stanza bodies.
         """
         return [self.nodes[i] for i in self.nodes[node_idx].children]
+
+    def source_span(self, node_idx: int) -> ConfigSourceSpan:
+        """Return the header and all descendants in their original order."""
+        stanza_nodes: list[ConfigNode] = []
+
+        def append_subtree(current_idx: int) -> None:
+            current = self.nodes[current_idx]
+            stanza_nodes.append(current)
+            for child_idx in current.children:
+                append_subtree(child_idx)
+
+        append_subtree(node_idx)
+        stanza_nodes.sort(key=lambda node: node.line.line_no)
+        return ConfigSourceSpan(
+            line_start=stanza_nodes[0].line.line_no,
+            line_end=stanza_nodes[-1].line.line_no,
+            fragment="\n".join(node.line.text for node in stanza_nodes),
+        )
 
 
 class ConfigTreeBuilder:

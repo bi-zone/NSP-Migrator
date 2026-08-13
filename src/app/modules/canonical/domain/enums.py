@@ -35,6 +35,7 @@ class ObjectKind(StrEnum):
     RANGE = "range"
     FQDN = "fqdn"
     ANY_ADDR = "any_addr"
+    UNRESOLVED_ADDR = "unresolved_addr"
 
     # -- service leafs
     TCP = "tcp"

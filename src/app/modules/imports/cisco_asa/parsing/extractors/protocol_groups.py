@@ -56,6 +56,7 @@ class ProtocolGroupExtractor:
         results: list[ParsedServiceObject] = []
 
         for name, node_idx in index.object_group_protocol.items():
+            source_span = tree.source_span(node_idx)
             group_payload: dict = {"members": [], "group_kind": "protocol"}
 
             for child in tree.children(node_idx):
@@ -77,7 +78,9 @@ class ProtocolGroupExtractor:
                     name=name,
                     kind=ParsedObjectType.PROTOCOL_GROUP,
                     payload=group_payload,
-                    source_line=tree.nodes[node_idx].line.line_no,
+                    source_line=source_span.line_start,
+                    source_line_end=source_span.line_end,
+                    source_fragment=source_span.fragment,
                 )
             )
 

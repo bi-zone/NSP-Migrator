@@ -79,10 +79,10 @@ class _AddressNormalizationMixin:
             state.register(obj)
             state.emit_trace(
                 line_start=item.source_line,
-                line_end=item.source_line,
+                line_end=item.source_line_end,
                 canonical_kind=TraceCanonicalKind.OBJECT,
                 canonical_id=obj.id,
-                source_fragment=f"object network {item.name}",
+                source_fragment=item.source_fragment,
                 canonical_role=TraceCanonicalRole.HEADER.value,
             )
 
@@ -138,6 +138,13 @@ class _AddressNormalizationMixin:
                         member_ref=member_ref,
                         state=state,
                     )
+                    if child_key.startswith("addr:unresolved:"):
+                        emit_unresolved_address_group_member_issue(
+                            group_name=item.name,
+                            member_ref=member_ref,
+                            source_line=item.source_line,
+                            state=state,
+                        )
                 elif isinstance(member_ref, str):
                     # Non-string member payloads are ignored silently by design.
                     emit_unresolved_address_group_member_issue(

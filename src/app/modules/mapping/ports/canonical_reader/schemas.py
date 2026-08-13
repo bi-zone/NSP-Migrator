@@ -9,17 +9,16 @@ from uuid import UUID
 
 # -- Canonical zones, objects (addr, services) schemas
 class CanonicalAddrObjKind(StrEnum):
-
     HOST = "host"
     SUBNET = "subnet"
     RANGE = "range"
     FQDN = "fqdn"
     ANY_ADDR = "any_addr"
+    UNRESOLVED_ADDR = "unresolved_addr"
     ADDR_GROUP = "addr_group"
 
 
 class CanonicalServiceKind(StrEnum):
-
     TCP = "tcp"
     UDP = "udp"
     ICMP = "icmp"

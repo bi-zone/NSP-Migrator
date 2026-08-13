@@ -50,7 +50,7 @@ class AddrObjectMatcher:
             # case CanonicalAddrObjKind.ADDR_GROUP:  # TODO: addr groups later, now only flat objects array
             #     return []
 
-            case CanonicalAddrObjKind.UNRESOLVED_SERVICE:
+            case CanonicalAddrObjKind.UNRESOLVED_ADDR:
                 return []
 
             case _:

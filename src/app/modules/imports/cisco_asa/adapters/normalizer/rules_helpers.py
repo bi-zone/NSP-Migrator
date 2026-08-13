@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.modules.canonical.domain import CanonicalRuleOperand, OperandRole
 from app.modules.imports.cisco_asa.adapters.normalizer.state import _NormalizerState
 from app.modules.imports.cisco_asa.domain.enums import (
@@ -88,7 +90,9 @@ def emit_rule_zone_issues(rule: ParsedAccessRule, state: _NormalizerState) -> No
         )
 
 
-def emit_textual_duplicate_issue(rule: ParsedAccessRule, state: _NormalizerState) -> None:
+def emit_textual_duplicate_issue(
+    rule: ParsedAccessRule, state: _NormalizerState
+) -> None:
     """Detect duplicate raw ACL lines within the same ACL and binding context.
 
     Signature key: (acl_name, binding_context_key, normalized raw line).
@@ -187,36 +191,39 @@ def validate_protocol_operand(rule: ParsedAccessRule, state: _NormalizerState) -
     return False
 
 
-def append_service_operand_trace(
+def append_service_operands_with_trace(
     *,
     rule: ParsedAccessRule,
-    canonical_rule_id,
-    service_obj_id,
+    canonical_rule_id: UUID,
+    service_obj_ids: list[UUID],
     state: _NormalizerState,
 ) -> None:
-    """Append service operand and trace after service object resolution.
+    """Append ordered service operands and traces after service resolution.
 
     Final step of per-rule materialization in _materialize_rules, called
-    immediately after _ensure_service_for_rule resolves service_obj_id.
+    immediately after _ensure_services_for_rule resolves effective leaf ids.
 
-    Service operand is always appended, including for skipped rules, so trace
-    coverage stays complete even when auto-apply is disabled.
-        Side Effects:
-        Appends one CanonicalRuleOperand and one trace record.
+    At least one service id is expected, including for skipped rules, so trace
+    coverage stays complete even when auto-apply is disabled. Multiple ids are
+    used for protocol-filtered members of a ``tcp-udp`` service group.
+
+    Side Effects:
+        Appends one CanonicalRuleOperand and trace record per service id.
     """
-    svc_op = CanonicalRuleOperand.create(
-        rule_id=canonical_rule_id,
-        operand_role=OperandRole.SERVICE,
-        target_object_id=service_obj_id,
-        position=0,
-    )
-    state.operands.append(svc_op)
-    state.emit_trace(
-        line_start=rule.line_start,
-        line_end=rule.line_end,
-        canonical_kind=TraceCanonicalKind.RULE_OPERAND,
-        canonical_id=svc_op.id,
-        source_fragment=rule.service_ref or rule.protocol,
-        canonical_role=TraceCanonicalRole.SERVICE.value,
-        note=f"protocol_operand={rule.protocol_operand_kind.value}",
-    )
+    for position, service_obj_id in enumerate(service_obj_ids):
+        svc_op = CanonicalRuleOperand.create(
+            rule_id=canonical_rule_id,
+            operand_role=OperandRole.SERVICE,
+            target_object_id=service_obj_id,
+            position=position,
+        )
+        state.operands.append(svc_op)
+        state.emit_trace(
+            line_start=rule.line_start,
+            line_end=rule.line_end,
+            canonical_kind=TraceCanonicalKind.RULE_OPERAND,
+            canonical_id=svc_op.id,
+            source_fragment=rule.service_ref or rule.protocol,
+            canonical_role=TraceCanonicalRole.SERVICE.value,
+            note=f"protocol_operand={rule.protocol_operand_kind.value}",
+        )

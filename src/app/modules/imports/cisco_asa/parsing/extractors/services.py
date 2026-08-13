@@ -20,7 +20,7 @@ class ServiceExtractionResult:
     services: list[ParsedServiceObject]
 
 
-def _parse_service_line(stripped: str) -> dict:  # noqa: C901
+def _parse_service_line(stripped: str) -> dict:
     """Parse service <proto> ... body line under object service.
 
     Produces payload dicts for build_canonical_service_from_payload during
@@ -34,38 +34,8 @@ def _parse_service_line(stripped: str) -> dict:  # noqa: C901
     if len(parts) < 2:
         return {}
 
-    proto = parts[1].lower()
-    payload: dict = {"protocol": proto}
-
-    if proto in {"tcp", "udp", "tcp-udp"}:
-        lowered = [p.lower() for p in parts]
-        if "eq" in lowered:
-            idx = lowered.index("eq")
-            if idx + 1 < len(parts):
-                payload["op"] = "eq"
-                payload["port"] = parts[idx + 1]
-        elif "range" in lowered:
-            idx = lowered.index("range")
-            if idx + 2 < len(parts):
-                payload["op"] = "range"
-                payload["port_from"] = parts[idx + 1]
-                payload["port_to"] = parts[idx + 2]
-        return payload
-
-    if proto in {"icmp", "icmp6"}:
-        if len(parts) >= 3:
-            payload["icmp"] = " ".join(parts[2:])
-        return payload
-
-    if proto == "ip":
-        return payload
-
-    if proto == "esp":
-        return payload
-
-    if len(parts) > 2:
-        payload["raw"] = " ".join(parts[2:])
-    return payload
+    payload = parse_inline_service_object(" ".join(parts[1:]))
+    return payload or {}
 
 
 def _parse_service_group_member(stripped: str) -> dict | None:
@@ -127,6 +97,7 @@ class ServiceExtractor:
 
         for name, node_idx in index.object_service.items():
             node = tree.nodes[node_idx]
+            source_span = tree.source_span(node_idx)
             payload: dict = {}
 
             for child in tree.children(node_idx):
@@ -146,12 +117,15 @@ class ServiceExtractor:
                     name=name,
                     kind=ParsedObjectType.SERVICE,
                     payload=payload,
-                    source_line=node.line.line_no,
+                    source_line=source_span.line_start,
+                    source_line_end=source_span.line_end,
+                    source_fragment=source_span.fragment,
                 )
             )
 
         for name, node_idx in index.object_group_service.items():
             node = tree.nodes[node_idx]
+            source_span = tree.source_span(node_idx)
             header_parts = node.line.stripped.split()
             # Header form: object-group service NAME PROTO — PROTO drives port-object parsing.
             group_protocol = header_parts[3].lower() if len(header_parts) >= 4 else None
@@ -176,12 +150,15 @@ class ServiceExtractor:
                     name=name,
                     kind=ParsedObjectType.SERVICE_GROUP,
                     payload=group_payload,
-                    source_line=node.line.line_no,
+                    source_line=source_span.line_start,
+                    source_line_end=source_span.line_end,
+                    source_fragment=source_span.fragment,
                 )
             )
 
         for name, node_idx in index.object_group_icmp_type.items():
             node = tree.nodes[node_idx]
+            source_span = tree.source_span(node_idx)
             icmp_group_payload: dict = {
                 "members": [],
                 "protocol": "icmp",
@@ -208,7 +185,9 @@ class ServiceExtractor:
                     name=name,
                     kind=ParsedObjectType.SERVICE_GROUP,
                     payload=icmp_group_payload,
-                    source_line=node.line.line_no,
+                    source_line=source_span.line_start,
+                    source_line_end=source_span.line_end,
+                    source_fragment=source_span.fragment,
                 )
             )
 
