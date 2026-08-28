@@ -99,7 +99,7 @@ def _addr_object_from_payload(
             object_key=object_key,
             object_family=ObjectFamily.ADDR,
             object_kind=ObjectKind.SUBNET,
-            name=cidr,
+            name=name,
             ip_version=4,
             cidr=cidr,
         )

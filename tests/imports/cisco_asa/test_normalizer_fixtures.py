@@ -192,6 +192,8 @@ def test_tc_18_subnet_kind():
     outcome = normalize_cfg("TC_18")
     obj = objects_by_key(outcome)["addr:OBJ_SUBNET"]
     assert obj.object_kind == ObjectKind.SUBNET
+    assert obj.name == "OBJ_SUBNET"
+    assert obj.cidr == "10.3.21.0/27"
 
 
 def test_tc_19_object_service_tcp():
