@@ -19,7 +19,6 @@ from app.modules.mapping.services.mapping_objects.sdwan_catalog_indexes.addr_obj
 
 _ADDR_OBJ_BY_BUILTIN_ANY_SCORE = 100
 _ADDR_OBJ_BY_EXACT_VALUE_SCORE = 100
-_ADDR_OBJ_BY_NAME_SCORE = 70
 
 
 class AddrObjectMatcher:
@@ -33,7 +32,7 @@ class AddrObjectMatcher:
     def match(self, obj: CanonicalAddrObject) -> list[MappingEntityCandidatePayload]:
         match obj.kind:
             case CanonicalAddrObjKind.ANY_ADDR:
-                return self._match_any_addr(obj)
+                return self._match_any_addr()
 
             case CanonicalAddrObjKind.HOST:
                 return self._match_host(obj)
@@ -47,19 +46,16 @@ class AddrObjectMatcher:
             case CanonicalAddrObjKind.FQDN:
                 return self._match_fqdn(obj)
 
-            # case CanonicalAddrObjKind.ADDR_GROUP:  # TODO: addr groups later, now only flat objects array
-            #     return []
-
             case CanonicalAddrObjKind.UNRESOLVED_ADDR:
                 return []
+
+            # case CanonicalAddrObjKind.ADDR_GROUP:  # TODO: addr groups later, now only flat objects array
+            #     return []
 
             case _:
                 return []
 
-    def _match_any_addr(
-        self,
-        obj: CanonicalAddrObject,
-    ) -> list[MappingEntityCandidatePayload]:
+    def _match_any_addr(self) -> list[MappingEntityCandidatePayload]:
         candidates: list[CandidateDraft] = []
 
         for sdwan_obj in self._catalog_index.find_builtin_any_addr_objects():
@@ -70,9 +66,6 @@ class AddrObjectMatcher:
                     CandidateMatchStrategy.BUILTIN_ANY,
                 )
             )
-
-        # Name fallback. Sometimes imported canonical "any" is represented only by name.
-        candidates.extend(self._match_by_name(obj.name))
 
         return CandidateFinalizer.finalize(candidates)
 
@@ -86,7 +79,7 @@ class AddrObjectMatcher:
             try:
                 host = IPv4Address(obj.cidr.split("/")[0])
             except ValueError:
-                return CandidateFinalizer.finalize(self._match_by_name(obj.name))
+                return []
 
             for sdwan_obj in self._catalog_index.find_addr_by_host(host):
                 candidates.append(
@@ -96,8 +89,6 @@ class AddrObjectMatcher:
                         CandidateMatchStrategy.EXACT_VALUE,
                     )
                 )
-
-        candidates.extend(self._match_by_name(obj.name))
 
         return CandidateFinalizer.finalize(candidates)
 
@@ -111,7 +102,7 @@ class AddrObjectMatcher:
             try:
                 prefix = IPv4Network(obj.cidr, strict=False)
             except ValueError:
-                return CandidateFinalizer.finalize(self._match_by_name(obj.name))
+                return []
 
             for sdwan_obj in self._catalog_index.find_addr_by_prefix(prefix):
                 candidates.append(
@@ -121,8 +112,6 @@ class AddrObjectMatcher:
                         CandidateMatchStrategy.EXACT_VALUE,
                     )
                 )
-
-        candidates.extend(self._match_by_name(obj.name))
 
         return CandidateFinalizer.finalize(candidates)
 
@@ -137,7 +126,7 @@ class AddrObjectMatcher:
                 range_start = IPv4Address(obj.range_start)
                 range_end = IPv4Address(obj.range_end)
             except ValueError:
-                return CandidateFinalizer.finalize(self._match_by_name(obj.name))
+                return []
 
             for sdwan_obj in self._catalog_index.find_addr_by_range(
                 range_start,
@@ -150,8 +139,6 @@ class AddrObjectMatcher:
                         CandidateMatchStrategy.EXACT_VALUE,
                     )
                 )
-
-        candidates.extend(self._match_by_name(obj.name))
 
         return CandidateFinalizer.finalize(candidates)
 
@@ -171,21 +158,7 @@ class AddrObjectMatcher:
                     )
                 )
 
-        candidates.extend(self._match_by_name(obj.name))
-
         return CandidateFinalizer.finalize(candidates)
-
-    def _match_by_name(self, name: str) -> list[CandidateDraft]:
-        # return [
-        #     self._candidate(
-        #         sdwan_obj,
-        #         _ADDR_OBJ_BY_NAME_SCORE,
-        #         CandidateMatchStrategy.NORMALIZED_NAME,
-        #     )
-        #     for sdwan_obj in self._catalog_index.find_addr_by_name(name)
-        # ]
-        # TODO: not using search by name now
-        return []
 
     @staticmethod
     def _candidate(

@@ -6,7 +6,11 @@ from app.integrations.sdwan_csp_api.gateways.models import (
     SdwanService,
     SdwanZone,
 )
-from app.modules.execute.domain.enums import RuleMatchStatus, SdwanRuleAction
+from app.modules.execute.domain.enums import (
+    CoverageField,
+    RuleMatchStatus,
+    SdwanRuleAction,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +33,9 @@ class RuleBody:
 
 @dataclass(frozen=True, slots=True)
 class PlannedRuleDraft(RuleBody):
-    """Rule body prepared from Mapping data and planned for SD-WAN creation."""
+    """Rule body and name prepared from Mapping data for SD-WAN creation."""
+
+    name: str
 
     @classmethod
     def from_dict(cls, data: dict[str, str | list[int]]) -> Self:
@@ -41,6 +47,7 @@ class PlannedRuleDraft(RuleBody):
             return [int(item) for item in raw_data]
 
         return cls(
+            name=str(data["name"]),
             action=SdwanRuleAction(data["action"]),  # type: ignore
             src_zones=_to_int_list(data["src_zones"]),
             dst_zones=_to_int_list(data["dst_zones"]),
@@ -52,6 +59,7 @@ class PlannedRuleDraft(RuleBody):
     def to_dict(self) -> dict[str, int | str | list[int]]:
         """Return JSON-compatible representation for DB/API serialization."""
         return {
+            "name": self.name,
             "action": self.action.value,
             "src_zones": self.src_zones,
             "dst_zones": self.dst_zones,
@@ -90,9 +98,40 @@ class SdwanPolicyCatalog:
 
 
 @dataclass(frozen=True, slots=True)
+class CoverageValue:
+    """One resolved SD-WAN object value participating in coverage evidence."""
+
+    object_id: int
+    object_name: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageDetail:
+    """One existing value that strictly covers one or more planned values.
+
+    Exact values are intentionally omitted: consumers need only the delta that
+    made the rule covered instead of exactly matched.
+    """
+
+    field: CoverageField
+    covering_value: CoverageValue
+    covered_values: tuple[CoverageValue, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ExcludedExistingRule:
+    """Existing SD-WAN policy omitted from comparison due to invalid operands."""
+
+    sdwan_rule_id: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class RuleCompareResult:
-    """Flat comparison result stored directly on ExecutePlanRule."""
+    """Comparison result stored directly on ExecutePlanRule."""
 
     match_status: RuleMatchStatus
     matched_sdwan_rule_id: int | None
     match_info: str
+    coverage_details: tuple[CoverageDetail, ...] = ()

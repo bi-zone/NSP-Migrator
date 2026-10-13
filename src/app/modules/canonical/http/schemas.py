@@ -11,6 +11,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.core.fastapi.querying import PaginationResponse
+
 # TODO:: Think about mirroring
 from app.modules.canonical.domain.enums import (
     ObjectFamily,
@@ -37,7 +39,9 @@ class CanonicalSnapshotResponse(BaseModel):
         description="Snapshot lifecycle status (see domain.enums.SnapshotStatus)."
     )
     zones_total: int = Field(description="Total zone count stored for this snapshot.")
-    objects_total: int = Field(description="Total object count stored for this snapshot.")
+    objects_total: int = Field(
+        description="Total object count stored for this snapshot."
+    )
     rules_total: int = Field(description="Total rule count stored for this snapshot.")
     issues_total: int = Field(
         description="Total normalizer issue count linked to this snapshot."
@@ -53,7 +57,9 @@ class CanonicalZoneResponse(BaseModel):
     """Zone catalog entry for a snapshot."""
 
     id: UUID = Field(description="Canonical zone identifier.")
-    canonical_snapshot_id: UUID = Field(description="Owner canonical snapshot identifier.")
+    canonical_snapshot_id: UUID = Field(
+        description="Owner canonical snapshot identifier."
+    )
     zone_key: str = Field(description="Stable zone key within the snapshot.")
     name: str = Field(description="Human-readable zone name.")
     direction_hint: str | None = Field(
@@ -72,7 +78,9 @@ class CanonicalObjectResponse(BaseModel):
     """Address or service object; list and scope endpoints return this shape."""
 
     id: UUID = Field(description="Canonical object identifier.")
-    canonical_snapshot_id: UUID = Field(description="Owner canonical snapshot identifier.")
+    canonical_snapshot_id: UUID = Field(
+        description="Owner canonical snapshot identifier."
+    )
     object_key: str = Field(description="Stable object key within the snapshot.")
     object_family: ObjectFamily = Field(
         description="Object family: address or service (see domain.enums.ObjectFamily)."
@@ -95,23 +103,36 @@ class CanonicalObjectResponse(BaseModel):
     ip_version: int | None = Field(
         default=None, description="IP version for address objects (4 or 6)."
     )
-    cidr: str | None = Field(default=None, description="CIDR notation for host/network objects.")
+    cidr: str | None = Field(
+        default=None, description="CIDR notation for host/network objects."
+    )
     range_start: str | None = Field(
         default=None, description="Range start for address-range objects."
     )
     range_end: str | None = Field(
         default=None, description="Range end for address-range objects."
     )
-    fqdn: str | None = Field(default=None, description="FQDN for DNS-based address objects.")
+    fqdn: str | None = Field(
+        default=None, description="FQDN for DNS-based address objects."
+    )
     protocol: str | None = Field(
         default=None, description="Protocol for service objects (tcp, udp, icmp, ...)."
     )
-    port_from: int | None = Field(default=None, description="Inclusive service port lower bound.")
-    port_to: int | None = Field(default=None, description="Inclusive service port upper bound.")
-    icmp_type: int | None = Field(default=None, description="ICMP type for icmp service objects.")
-    icmp_code: int | None = Field(default=None, description="ICMP code for icmp service objects.")
+    port_from: int | None = Field(
+        default=None, description="Inclusive service port lower bound."
+    )
+    port_to: int | None = Field(
+        default=None, description="Inclusive service port upper bound."
+    )
+    icmp_type: int | None = Field(
+        default=None, description="ICMP type for icmp service objects."
+    )
+    icmp_code: int | None = Field(
+        default=None, description="ICMP code for icmp service objects."
+    )
     description: str | None = Field(
-        default=None, description="Optional free-form object description from source config."
+        default=None,
+        description="Optional free-form object description from source config.",
     )
 
     model_config = {"from_attributes": True}
@@ -129,7 +150,8 @@ class CanonicalRuleOperandResponse(BaseModel):
         default=None, description="Referenced zone ID when operand role is zone-based."
     )
     target_object_id: UUID | None = Field(
-        default=None, description="Referenced object ID when operand role is object/service."
+        default=None,
+        description="Referenced object ID when operand role is object/service.",
     )
     position: int = Field(description="Operand ordering within the rule.")
 
@@ -149,7 +171,9 @@ class CanonicalObjectSummaryResponse(BaseModel):
 
     id: UUID = Field(description="Canonical object identifier.")
     object_key: str = Field(description="Stable object key within the snapshot.")
-    object_family: ObjectFamily = Field(description="Object family: address or service.")
+    object_family: ObjectFamily = Field(
+        description="Object family: address or service."
+    )
     object_kind: ObjectKind = Field(description="Concrete object kind.")
     name: str = Field(description="Human-readable object name.")
 
@@ -192,17 +216,22 @@ class CanonicalRuleCoreResponse(BaseModel):
     """Rule metadata without operands (detail view exposes operands separately)."""
 
     id: UUID = Field(description="Canonical rule identifier.")
-    canonical_snapshot_id: UUID = Field(description="Owner canonical snapshot identifier.")
+    canonical_snapshot_id: UUID = Field(
+        description="Owner canonical snapshot identifier."
+    )
     rule_key: str = Field(description="Stable rule key within the snapshot.")
     name: str = Field(description="Human-readable rule name.")
-    action: str = Field(description="Rule action from source normalizer (permit, deny, ...).")
+    action: str = Field(
+        description="Rule action from source normalizer (permit, deny, ...)."
+    )
     enabled: bool = Field(description="Whether the rule is enabled in source config.")
     priority: int = Field(description="Rule ordering priority within its section.")
     section: str | None = Field(
         default=None, description="ACL section or policy block name from source config."
     )
     description: str | None = Field(
-        default=None, description="Optional free-form rule description from source config."
+        default=None,
+        description="Optional free-form rule description from source config.",
     )
 
     model_config = {"from_attributes": True}
@@ -211,7 +240,9 @@ class CanonicalRuleCoreResponse(BaseModel):
 class CanonicalRuleDetailResponse(BaseModel):
     """Single rule with hydrated operands (rule detail endpoint)."""
 
-    rule: CanonicalRuleCoreResponse = Field(description="Rule metadata without nested operands.")
+    rule: CanonicalRuleCoreResponse = Field(
+        description="Rule metadata without nested operands."
+    )
     operands: list[CanonicalRuleOperandHydratedResponse] = Field(
         default_factory=list,
         description="Operands with resolved zone/object summaries for UI display.",
@@ -222,13 +253,17 @@ class CanonicalRuleResponse(BaseModel):
     """Rule with flat operand IDs (list and rule_scope endpoints)."""
 
     id: UUID = Field(description="Canonical rule identifier.")
-    canonical_snapshot_id: UUID = Field(description="Owner canonical snapshot identifier.")
+    canonical_snapshot_id: UUID = Field(
+        description="Owner canonical snapshot identifier."
+    )
     rule_key: str = Field(description="Stable rule key within the snapshot.")
     name: str = Field(description="Human-readable rule name.")
     action: str = Field(description="Rule action from source normalizer.")
     enabled: bool = Field(description="Whether the rule is enabled in source config.")
     priority: int = Field(description="Rule ordering priority within its section.")
-    section: str | None = Field(default=None, description="ACL section or policy block name.")
+    section: str | None = Field(
+        default=None, description="ACL section or policy block name."
+    )
     description: str | None = Field(
         default=None, description="Optional free-form rule description."
     )
@@ -240,20 +275,16 @@ class CanonicalRuleResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class PaginationResponse(BaseModel):
-    """Pagination metadata for rule_scope responses."""
+class CanonicalRulesListResponse(BaseModel):
+    """Paginated rule list for GET .../rules."""
 
-    limit: int | None = Field(
-        default=None,
-        description="Requested page size; null means return all matching rules.",
+    rules: list[CanonicalRuleResponse] = Field(
+        description="Rules matching filters (paginated when limit/offset are set)."
     )
-    offset: int | None = Field(
-        default=None,
-        description="Requested row offset; null treated as zero by the use case.",
+    pagination: PaginationResponse = Field(
+        description="Pagination totals for the rules slice."
     )
-    total: int = Field(description="Total rules matching filters before pagination slice.")
 
-    # TODO: extract shared model_config into a BaseResponseSchema if more models need it.
     model_config = {"from_attributes": True}
 
 
@@ -286,7 +317,9 @@ class CanonicalIssueResponse(BaseModel):
     """Normalizer issue emitted during canonical snapshot materialization."""
 
     id: UUID = Field(description="Issue row identifier.")
-    canonical_snapshot_id: UUID = Field(description="Owner canonical snapshot identifier.")
+    canonical_snapshot_id: UUID = Field(
+        description="Owner canonical snapshot identifier."
+    )
     entity_type: str = Field(
         description="Entity type the issue relates to (rule, object, zone, ...)."
     )
@@ -303,6 +336,8 @@ class CanonicalIssueResponse(BaseModel):
     source_line_end: int | None = Field(
         default=None, description="Inclusive source config line end for traceability."
     )
-    created_at: datetime = Field(description="UTC timestamp when the issue was recorded.")
+    created_at: datetime = Field(
+        description="UTC timestamp when the issue was recorded."
+    )
 
     model_config = {"from_attributes": True}

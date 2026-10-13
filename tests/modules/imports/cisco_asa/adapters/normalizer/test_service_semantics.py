@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 
+import pytest
+
 from app.modules.canonical.domain.enums import ObjectKind, OperandRole
 from app.modules.imports.cisco_asa.adapters.normalizer import CiscoAsaNormalizerAdapter
 from app.modules.imports.cisco_asa.adapters.parser import CiscoAsaParserAdapter
@@ -107,8 +109,8 @@ def test_service_group_members_persisted_as_object_members():
         )
         for e in edges
     }
-    assert any("service:tcp:22-22" in k or k.endswith(":22-22") for k in child_keys)
-    assert any("service:tcp:80-80" in k for k in child_keys)
+    assert "service:tcp:22" in child_keys
+    assert "service:tcp:80" in child_keys
 
 
 def test_tcp_udp_port_objects_expand_to_tcp_and_udp_group_members():
@@ -121,20 +123,18 @@ def test_tcp_udp_port_objects_expand_to_tcp_and_udp_group_members():
         for member in outcome.canonical.object_members
         if member.parent_object_id == parent.id
     }
-    children = {
-        obj.object_key: obj for obj in outcome.canonical.objects if obj.id in child_ids
-    }
+    children = {obj.object_key: obj for obj in outcome.canonical.objects if obj.id in child_ids}
 
     assert set(children) == {
-        "service:tcp:53-53",
-        "service:udp:53-53",
+        "service:tcp:53",
+        "service:udp:53",
         "service:tcp:5000-5001",
         "service:udp:5000-5001",
     }
-    assert children["service:tcp:53-53"].object_kind == ObjectKind.TCP
-    assert children["service:tcp:53-53"].name == "tcp:53-53"
-    assert children["service:udp:53-53"].object_kind == ObjectKind.UDP
-    assert children["service:udp:53-53"].name == "udp:53-53"
+    assert children["service:tcp:53"].object_kind == ObjectKind.TCP
+    assert children["service:tcp:53"].name == "tcp:53"
+    assert children["service:udp:53"].object_kind == ObjectKind.UDP
+    assert children["service:udp:53"].name == "udp:53"
 
 
 def test_tcp_udp_group_rule_operands_are_filtered_by_acl_protocol():
@@ -146,20 +146,18 @@ def test_tcp_udp_group_rule_operands_are_filtered_by_acl_protocol():
     def service_keys(rule_name: str) -> list[str]:
         return [
             objects_by_id[operand.target_object_id].object_key
-            for operand in sorted(
-                outcome.canonical.operands, key=lambda item: item.position
-            )
+            for operand in sorted(outcome.canonical.operands, key=lambda item: item.position)
             if operand.rule_id == rules_by_name[rule_name].id
             and operand.operand_role == OperandRole.SERVICE
             and operand.target_object_id is not None
         ]
 
     assert service_keys("TEST_ACL:1") == [
-        "service:tcp:53-53",
+        "service:tcp:53",
         "service:tcp:5000-5001",
     ]
     assert service_keys("TEST_ACL:2") == [
-        "service:udp:53-53",
+        "service:udp:53",
         "service:udp:5000-5001",
     ]
 
@@ -168,9 +166,10 @@ def test_acl_named_service_ref_resolves_builtin():
     parsed = CiscoAsaParserAdapter().parse(CFG_ACL_SSH)
     outcome = CiscoAsaNormalizerAdapter().normalize(parsed, source_snapshot_id=uuid4())
     by_key = _objects_by_key(outcome)
-    assert "service:tcp:22-22" in by_key
-    svc = by_key["service:tcp:22-22"]
+    assert "service:tcp:22" in by_key
+    svc = by_key["service:tcp:22"]
     assert svc.object_kind == ObjectKind.TCP
+    assert svc.name == "tcp:22"
     assert svc.port_from == 22
     assert svc.port_to == 22
     unresolved = [o for o in outcome.canonical.objects if "unresolved" in o.object_key]
@@ -206,6 +205,42 @@ def test_icmp_service_group_not_any_service():
     ]
     assert len(edges) >= 1
 
+@pytest.mark.parametrize(
+    ("protocol", "expected_kind"),
+    [
+        ("icmp", ObjectKind.ICMP),
+        ("tcp", ObjectKind.TCP),
+        ("udp", ObjectKind.UDP),
+        ("ip", ObjectKind.IP_PROTO),
+    ],
+)
+def test_protocol_only_acl_keeps_protocol_service_semantics(
+    protocol: str,
+    expected_kind: ObjectKind,
+) -> None:
+    cfg = f"""
+access-list TEST_ACL extended permit {protocol} any any
+access-group TEST_ACL global
+"""
+    parsed = CiscoAsaParserAdapter().parse(cfg)
+    outcome = CiscoAsaNormalizerAdapter().normalize(parsed, source_snapshot_id=uuid4())
+    rule = outcome.canonical.rules[0]
+    service_operand = next(
+        operand
+        for operand in outcome.canonical.operands
+        if operand.rule_id == rule.id and operand.operand_role == OperandRole.SERVICE
+    )
+    service = next(
+        obj
+        for obj in outcome.canonical.objects
+        if obj.id == service_operand.target_object_id
+    )
+
+    assert service.object_kind == expected_kind
+    assert service.object_kind != ObjectKind.ANY_SERVICE
+    assert service.protocol == protocol
+
+
 
 def test_named_tcp_udp_services_without_ports_keep_l4_kinds():
     parsed = CiscoAsaParserAdapter().parse(CFG_L4_ANY_OBJECTS)
@@ -226,14 +261,19 @@ def test_named_tcp_udp_services_without_ports_keep_l4_kinds():
 
     rule = outcome.canonical.rules[0]
     operands = [
-        operand for operand in outcome.canonical.operands if operand.rule_id == rule.id
+        operand
+        for operand in outcome.canonical.operands
+        if operand.rule_id == rule.id
     ]
     service_operand = next(
-        operand for operand in operands if operand.operand_role == OperandRole.SERVICE
+        operand
+        for operand in operands
+        if operand.operand_role == OperandRole.SERVICE
     )
     assert service_operand.target_object_id == tcp_service.id
     assert not any(
-        obj.object_kind == ObjectKind.UNRESOLVED_ADDR and obj.name == "TCP_ANY_OBJECT"
+        obj.object_kind == ObjectKind.UNRESOLVED_ADDR
+        and obj.name == "TCP_ANY_OBJECT"
         for obj in outcome.canonical.objects
     )
 

@@ -1,8 +1,8 @@
 import logging
-from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 
@@ -15,9 +15,6 @@ from app.core.errors import (
 )
 
 logger = logging.getLogger(__name__)
-ExceptionHandler = Callable[
-    [Request, Exception], JSONResponse | Awaitable[JSONResponse]
-]
 
 
 def _request_id(request: Request) -> str:
@@ -25,20 +22,7 @@ def _request_id(request: Request) -> str:
     return str(value)
 
 
-def _error_payload(
-    *, code: str, message: str, request_id: str, details: dict[str, Any] | None = None
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "code": code,
-        "message": message,
-        "request_id": request_id,
-    }
-    if details:
-        payload["details"] = details
-    return payload
-
-
-def _respond(
+def error_response(
     request: Request,
     *,
     status_code: int,
@@ -46,25 +30,24 @@ def _respond(
     message: str,
     details: dict[str, Any] | None = None,
 ) -> JSONResponse:
-    return JSONResponse(
-        status_code=status_code,
-        content=_error_payload(
-            code=code,
-            message=message,
-            request_id=_request_id(request),
-            details=details,
-        ),
-    )
+    content: dict[str, Any] = {
+        "code": code,
+        "message": message,
+        "request_id": _request_id(request),
+    }
+
+    if details is not None:
+        content["details"] = details
+
+    return JSONResponse(status_code=status_code, content=content)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    def _register(exc_type: type[Exception], handler: ExceptionHandler) -> None:
-        app.add_exception_handler(exc_type, handler)
 
     async def handle_domain_validation(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        return _respond(
+        return error_response(
             request,
             status_code=422,
             code="domain_validation_error",
@@ -72,7 +55,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     async def handle_not_found(request: Request, exc: Exception) -> JSONResponse:
-        return _respond(
+        return error_response(
             request,
             status_code=404,
             code="not_found",
@@ -80,7 +63,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     async def handle_conflict(request: Request, exc: Exception) -> JSONResponse:
-        return _respond(
+        return error_response(
             request,
             status_code=409,
             code="conflict",
@@ -100,7 +83,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                 or getattr(orig, "pgcode", None),
             },
         )
-        return _respond(
+        return error_response(
             request,
             status_code=409,
             code="integrity_conflict",
@@ -110,7 +93,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def handle_infrastructure_error(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        return _respond(
+        return error_response(
             request,
             status_code=503,
             code="infrastructure_error",
@@ -118,7 +101,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         )
 
     async def handle_app_error(request: Request, exc: Exception) -> JSONResponse:
-        return _respond(
+        return error_response(
             request,
             status_code=400,
             code="app_error",
@@ -128,24 +111,47 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def handle_unhandled_exception(
         request: Request, exc: Exception
     ) -> JSONResponse:
-        logger.exception(
+        logger.error(
             "unhandled exception",
-            extra={"request_id": _request_id(request)},
+            extra={
+                "request_id": _request_id(request),
+                "exception_type": type(exc).__name__,
+            },
         )
 
-        return _respond(
+        return error_response(
             request,
             status_code=500,
             code="internal_server_error",
-            message=str(exc),
+            message="Internal server error",
         )
 
-    _register(DomainValidationError, handle_domain_validation)
-    _register(NotFoundError, handle_not_found)
-    _register(ConflictError, handle_conflict)
-    _register(IntegrityError, handle_integrity_error)
-    _register(InfrastructureError, handle_infrastructure_error)
-    _register(AppError, handle_app_error)
+    async def handle_request_validation(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+        safe_errors = [
+            {
+                "type": error.get("type", "value_error"),
+                "loc": list(error.get("loc", ())),
+            }
+            for error in errors
+        ]
+        return error_response(
+            request,
+            status_code=422,
+            code="request_validation_error",
+            message="Request validation failed",
+            details={"errors": safe_errors},
+        )
+
+    app.add_exception_handler(RequestValidationError, handle_request_validation)
+    app.add_exception_handler(DomainValidationError, handle_domain_validation)
+    app.add_exception_handler(NotFoundError, handle_not_found)
+    app.add_exception_handler(ConflictError, handle_conflict)
+    app.add_exception_handler(IntegrityError, handle_integrity_error)
+    app.add_exception_handler(InfrastructureError, handle_infrastructure_error)
+    app.add_exception_handler(AppError, handle_app_error)
 
     # fallback
-    _register(Exception, handle_unhandled_exception)
+    app.add_exception_handler(Exception, handle_unhandled_exception)

@@ -18,8 +18,8 @@ Metrics printed by run correlate with normalizer behavior:
   textual_duplicate_rule issues from emit_textual_duplicate_issue.
 - rules_missing_binding_context — unbound / inferred bindings from
   ZoneResolver (no access-group match).
-- rules_with_unresolved_zone — count of unresolved_zone issues from
-  emit_rule_zone_issues.
+- rules_with_unresolved_zone — count of rules carrying binding_missing in
+  metadata. Missing zones are migration context, not CanonicalIssue rows.
 - rules_generated_more_than_once_from_same_raw_trace — multiple RULE traces
   for one source line span; **expected** when ZoneResolver.resolve_all fans
   out one ACL line across several interface bindings.
@@ -54,7 +54,6 @@ def run(path: Path) -> None:
     outcome = normalizer.normalize(parsed, source_snapshot_id=uuid4())
 
     rules = outcome.canonical.rules
-    issues = outcome.canonical.issues
     traces = outcome.trace.records
 
     print(f"file={path}")
@@ -88,7 +87,11 @@ def run(path: Path) -> None:
     ]
     print(f"rules_missing_binding_context={len(missing_binding)}")
 
-    unresolved_zone = [i for i in issues if i.issue_code == "unresolved_zone"]
+    unresolved_zone = [
+        rule
+        for rule in rules
+        if "binding_missing" in _extract_skip_reasons(rule.description)
+    ]
     print(f"rules_with_unresolved_zone={len(unresolved_zone)}")
 
     rules_from_same_trace: dict[tuple[int, int], list[str]] = defaultdict(list)
@@ -126,6 +129,18 @@ def _extract_binding_context(description: str | None) -> str:
         if chunk.startswith("binding_context="):
             return chunk.split("=", 1)[1]
     return "unknown"
+
+# TODO:: think about nto hard code zones skip reasons
+def _extract_skip_reasons(description: str | None) -> set[str]:
+    """Parse comma-separated skip_reasons from CanonicalRule metadata."""
+    if not description:
+        return set()
+    for part in description.split(";"):
+        chunk = part.strip()
+        if chunk.startswith("skip_reasons="):
+            values = chunk.split("=", 1)[1]
+            return {value.strip() for value in values.split(",") if value.strip()}
+    return set()
 
 
 def _rule_trace_fragment(traces, rule_id) -> str:

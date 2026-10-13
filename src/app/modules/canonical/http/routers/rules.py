@@ -1,9 +1,11 @@
 """Canonical rule read endpoints including rule_scope projection."""
 
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
+from app.core.fastapi.querying import PaginationResponse
 from app.modules.canonical.application.use_cases.get_canonical_rule import (
     GetCanonicalRuleQuery,
     GetCanonicalRuleUseCase,
@@ -13,7 +15,6 @@ from app.modules.canonical.application.use_cases.get_canonical_rule_scope import
     GetCanonicalRuleScopeUseCase,
 )
 from app.modules.canonical.application.use_cases.get_canonical_rules import (
-    GetCanonicalRulesQuery,
     GetCanonicalRulesUseCase,
 )
 from app.modules.canonical.di.dependencies import (
@@ -21,39 +22,57 @@ from app.modules.canonical.di.dependencies import (
     get_canonical_rule_use_case,
     get_canonical_rules_use_case,
 )
+from app.modules.canonical.http.query_params import SnapshotRulesQueryParams
 from app.modules.canonical.http.schemas import (
     CanonicalRuleCoreResponse,
     CanonicalRuleDetailResponse,
     CanonicalRuleOperandHydratedResponse,
     CanonicalRuleResponse,
     CanonicalRuleScopeResponse,
+    CanonicalRulesListResponse,
 )
 from app.modules.canonical.ports.rule_repository import CanonicalRuleFilters
+
+SnapshotRulesParams = Annotated[SnapshotRulesQueryParams, Query()]
+CanonicalRulesUseCaseDep = Annotated[
+    GetCanonicalRulesUseCase,
+    Depends(get_canonical_rules_use_case),
+]
 
 router = APIRouter(tags=["canonical"])
 
 
 @router.get(
     "/snapshots/{snapshot_id}/rules",
-    response_model=list[CanonicalRuleResponse],
+    response_model=CanonicalRulesListResponse,
     summary="List snapshot rules",
     description=(
-        "Returns all rules for a canonical snapshot with flat operand references. "
+        "Returns paginated rules for a canonical snapshot with flat operand "
+        "references. Supports scoped search (rules / objects / zones / all), "
+        "exact filters, nested object-group filtering, and whitelist sorting. "
         "For hydrated zone/object names use the rule detail endpoint. "
         "Returns 404 when the snapshot does not exist."
     ),
 )
 async def get_snapshot_rules(
     snapshot_id: UUID,
-    use_case: GetCanonicalRulesUseCase = Depends(get_canonical_rules_use_case),
-) -> list[CanonicalRuleResponse]:
+    params: SnapshotRulesParams,
+    use_case: CanonicalRulesUseCaseDep,
+) -> CanonicalRulesListResponse:
     result = await use_case.execute(
-        GetCanonicalRulesQuery(canonical_snapshot_id=snapshot_id)
+        params.to_application_query(
+            canonical_snapshot_id=snapshot_id,
+        )
     )
-    return [
-        CanonicalRuleResponse.model_validate(rule, from_attributes=True)
-        for rule in result.rules
-    ]
+    return CanonicalRulesListResponse(
+        rules=[
+            CanonicalRuleResponse.model_validate(rule, from_attributes=True)
+            for rule in result.rules
+        ],
+        pagination=PaginationResponse.model_validate(
+            result.pagination, from_attributes=True
+        ),
+    )
 
 
 @router.get(
@@ -119,9 +138,12 @@ async def get_snapshot_rule_scope(
         default=None,
         description="Explicit rule IDs to include in the scope projection.",
     ),
-    name_contains: str | None = Query(
+    search: str | None = Query(
         default=None,
-        description="Case-sensitive substring match on rule name or rule_key.",
+        description=(
+            "Case-insensitive search across rules, zones, and objects, including "
+            "objects nested in groups."
+        ),
     ),
     action: str | None = Query(
         default=None,
@@ -141,7 +163,9 @@ async def get_snapshot_rule_scope(
     ),
     operand_object_id: list[UUID] | None = Query(
         default=None,
-        description="Rules referencing any of these object IDs in any operand role.",
+        description=(
+            "Rules referencing these objects directly or through ancestor groups."
+        ),
     ),
     include_all_zones: bool = Query(
         default=False,
@@ -152,9 +176,10 @@ async def get_snapshot_rule_scope(
     ),
     use_case: GetCanonicalRuleScopeUseCase = Depends(get_canonical_rule_scope_use_case),
 ) -> CanonicalRuleScopeResponse:
+    # TODO(querying): migrate this legacy endpoint to composed query models.
     filters = CanonicalRuleFilters(
         rule_ids=list(rule_id) if rule_id else None,
-        name_contains=name_contains,
+        search=search,
         action=action,
         enabled=enabled,
         section=section,

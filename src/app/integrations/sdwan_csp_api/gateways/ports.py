@@ -11,7 +11,6 @@ from app.integrations.sdwan_csp_api.gateways.models import (
 
 
 class SDWANCatalogGatewayPort(ABC):
-
     @abstractmethod
     async def get_sdwan_full_catalog(self) -> SdwanFullCatalog:
         """Returns all zones, services and addr_objects (full catalog)"""
@@ -39,4 +38,6 @@ class SDWANCatalogGatewayPort(ABC):
     async def get_sdwan_device_objects(self) -> list[SdwanDeviceObject]: ...
 
     @abstractmethod
-    async def get_sdwan_device_object(self, dev_obj_id: str) -> SdwanDeviceObject: ...
+    async def get_sdwan_device_object(
+        self, dev_obj_id: str
+    ) -> SdwanDeviceObject | None: ...

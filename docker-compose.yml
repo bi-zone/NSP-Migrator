@@ -39,8 +39,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./client_cert.pem:/app/client_cert.pem:ro
     healthcheck:
       test:
         [
@@ -74,8 +72,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    volumes:
-      - ./client_cert.pem:/app/client_cert.pem:ro
     healthcheck:
       test:
         ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]

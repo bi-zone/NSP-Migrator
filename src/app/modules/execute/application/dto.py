@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Literal
+from uuid import UUID
 
 from app.modules.execute.domain.enums import SdwanRuleAction
 
@@ -49,3 +50,22 @@ class SdwanRuleDTO:
 
     src_idents: list[Any]
     dst_idents: list[Any]
+
+
+@dataclass(slots=True, frozen=True)
+class PushRuleResultDTO:
+    """Outcome of one attempt to create an execute-plan rule in SD-WAN."""
+
+    execute_plan_rule_id: UUID
+    rule_name: str
+    sdwan_rule_id: int | None
+    error: str | None
+
+
+@dataclass(slots=True, frozen=True)
+class CommitInfoDTO:
+    """Info about changes commit"""
+
+    commit_id: int
+    name: str
+    description: str

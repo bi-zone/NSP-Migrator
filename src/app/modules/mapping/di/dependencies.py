@@ -7,6 +7,9 @@ from app.modules.mapping.application.assign_zone_for_scope import (
 from app.modules.mapping.application.auto_select_with_auto_create import (
     AutoSelectEntitiesWithCreateForScopeUseCase,
 )
+from app.modules.mapping.application.discover_allowed_vpcs import (
+    DiscoverAllowedVpcsUseCase,
+)
 from app.modules.mapping.application.get_mapping_scope import GetMappingScopeUseCase
 from app.modules.mapping.application.get_mapping_scope_rules import (
     GetMappingScopeRulesUseCase,
@@ -91,6 +94,12 @@ def get_sdwan_addr_objects_use_case_dep(request: Request) -> GetSdwanAddrObjects
 
 def get_sdwan_targets_use_case_dep(request: Request) -> GetSdwanTargetsUseCase:
     return get_mapping_module_container(request).get_sdwan_targets_use_case()
+
+
+def get_discover_allowed_vpcs_use_case_dep(
+    request: Request,
+) -> DiscoverAllowedVpcsUseCase:
+    return get_mapping_module_container(request).discover_allowed_vpcs_use_case()
 
 
 def get_select_entity_with_create_on_sdwan_use_case(

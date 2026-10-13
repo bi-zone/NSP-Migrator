@@ -3,24 +3,26 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
+from app.integrations.sdwan_csp_api.gateways.models import SdwanFullCatalog
 from app.modules.execute.domain.entities import (
     ExecutePlan,
     ExecutePlanRule,
 )
 from app.modules.execute.domain.enums import RuleMatchStatus, SdwanRuleAction
 from app.modules.execute.domain.value_objects import (
+    ExcludedExistingRule,
     PlannedRuleDraft,
     RuleCompareResult,
     SdwanPolicyCatalog,
 )
-from app.modules.execute.ports.gateways import ExecuteSDWANGatewayPort
+from app.modules.execute.errors import ConflictError
+from app.modules.execute.ports.gateways import ExecuteSDWANGatewayProviderPort
 from app.modules.execute.ports.mapping_reader.port import MappingReaderPort
 from app.modules.execute.ports.mapping_reader.schemas import (
     MappedRuleData,
     MappingScopeData,
 )
-from app.modules.execute.ports.uow import ExecuteUnitOfWorkPort
+from app.modules.execute.ports.repositories import ExecuteRepositoryPort
 from app.modules.execute.services.rules_comparer import RulesComparer
 
 
@@ -40,6 +42,7 @@ class PrepareExecutePlanResult:
     matched_rules: int
     covered_rules: int
     errors_through_match: int
+    excluded_existing_rules: tuple[ExcludedExistingRule, ...]
 
 
 class PrepareExecutePlanUseCase:
@@ -47,15 +50,14 @@ class PrepareExecutePlanUseCase:
 
     def __init__(
         self,
-        uow: ExecuteUnitOfWorkPort,
-        sdwan_gateway: ExecuteSDWANGatewayPort,
+        execute_repo: ExecuteRepositoryPort,
+        sdwan_gateway_provider: ExecuteSDWANGatewayProviderPort,
         mapping_reader: MappingReaderPort,
     ) -> None:
-        self.uow = uow
-        self.sdwan_gateway = sdwan_gateway
+        self.execute_repo = execute_repo
+        self.sdwan_gateway_provider = sdwan_gateway_provider
         self.mapping_reader = mapping_reader
 
-    @async_transactional(read_only=False)
     async def execute(
         self,
         command: PrepareExecutePlanCommand,
@@ -66,49 +68,75 @@ class PrepareExecutePlanUseCase:
                 mapping_scope_id=command.mapping_scope_id,
             )
         )
-        mapped_rules_data: list[MappedRuleData] = (
-            await self.mapping_reader.get_mapping_scope_rules(command.mapping_scope_id)
-        )
+        mapped_rules_data: list[
+            MappedRuleData
+        ] = await self.mapping_reader.get_mapping_scope_rules(command.mapping_scope_id)
 
-        drafts_by_mapping_rule_id: dict[UUID, PlannedRuleDraft] = {
-            mapped_rule_data.id: self._build_draft(mapped_rule_data)
-            for mapped_rule_data in mapped_rules_data
-        }
+        sorted_mapped_rules_data = sorted(
+            mapped_rules_data,
+            key=lambda mapped_rule_data: mapped_rule_data.priority,
+        )
+        prepared_rules = [
+            (mapped_rule_data, self._build_draft(mapped_rule_data))
+            for mapped_rule_data in sorted_mapped_rules_data
+        ]
 
         extra_zone_ids, extra_service_ids, extra_addr_object_ids = (
-            self._collect_rule_refs(drafts_by_mapping_rule_id.values())
+            self._collect_rule_refs(draft for _, draft in prepared_rules)
         )
 
-        sdwan_policy_catalog: SdwanPolicyCatalog = (
-            await self.sdwan_gateway.get_sdwan_policy_catalog(
-                sdwan_target_id=mapping_scope.sdwan_target_id,
-                extra_zone_ids=extra_zone_ids,
-                extra_service_ids=extra_service_ids,
-                extra_addr_object_ids=extra_addr_object_ids,
+        async with self.sdwan_gateway_provider.acquire(
+            mapping_scope.csp_profile_id,
+            mapping_scope.vpc_id,
+        ) as sdwan_gateway:
+            # -- check that catalog fingerprint not changed
+            current_catalog: SdwanFullCatalog = (
+                await sdwan_gateway.get_sdwan_full_catalog()
             )
-        )
+            catalog_fingerprint = current_catalog.get_fingerprint()
+            if catalog_fingerprint != mapping_scope.catalog_fingerprint:
+                raise ConflictError(
+                    "SD-WAN catalog changed after mapping. "
+                    "Create a new mapping scope before preparing an execute plan."
+                )
+            # -- get policies with linked objects
+            sdwan_policy_catalog: SdwanPolicyCatalog = (
+                await sdwan_gateway.get_sdwan_policy_catalog(
+                    sdwan_target_id=mapping_scope.sdwan_target_id,
+                    extra_zone_ids=extra_zone_ids,
+                    extra_service_ids=extra_service_ids,
+                    extra_addr_object_ids=extra_addr_object_ids,
+                )
+            )
 
-        execute_plan = ExecutePlan.create(mapping_scope_id=command.mapping_scope_id)
-        await self.uow.plan_repo.add_plan(execute_plan)
+        execute_plan = ExecutePlan.create(
+            mapping_scope_id=command.mapping_scope_id,
+            catalog_fingerprint=catalog_fingerprint,
+        )
 
         rules_comparer = RulesComparer(catalog=sdwan_policy_catalog)
 
         execute_plan_rules: list[ExecutePlanRule] = []
-        for mapping_scope_rule_id, draft in drafts_by_mapping_rule_id.items():
+        for mapped_rule_data, draft in prepared_rules:
             match_result: RuleCompareResult = rules_comparer.compare_rule(draft)
 
             execute_plan_rules.append(
                 ExecutePlanRule.create(
                     execute_plan_id=execute_plan.id,
-                    mapping_scope_rule_id=mapping_scope_rule_id,
+                    mapping_scope_rule_id=mapped_rule_data.id,
+                    priority=mapped_rule_data.priority,
                     draft=draft,
                     match_status=match_result.match_status,
                     matched_sdwan_rule_id=match_result.matched_sdwan_rule_id,
                     match_info=match_result.match_info,
+                    coverage_details=match_result.coverage_details,
                 )
             )
 
-        await self.uow.plan_rule_repo.add_plan_rules_bulk(execute_plan_rules)
+        await self.execute_repo.add_plan_with_rules(
+            plan=execute_plan,
+            rules=execute_plan_rules,
+        )
 
         return PrepareExecutePlanResult(
             id=execute_plan.id,
@@ -136,11 +164,13 @@ class PrepareExecutePlanUseCase:
                 for rule in execute_plan_rules
                 if rule.match_status == RuleMatchStatus.MATCH_ERROR
             ),
+            excluded_existing_rules=rules_comparer.excluded_existing_rules,
         )
 
     def _build_draft(self, mapped_rule_data: MappedRuleData) -> PlannedRuleDraft:
         """Convert Mapping rule DTO into execute PlannedRuleDraft."""
         return PlannedRuleDraft(
+            name=mapped_rule_data.name,
             action=SdwanRuleAction(mapped_rule_data.action),
             src_zones=mapped_rule_data.src_zones,
             dst_zones=mapped_rule_data.dst_zones,

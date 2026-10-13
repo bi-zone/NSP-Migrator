@@ -57,6 +57,8 @@ class TraceRecordDTO:
         )
 
 
+# TODO(querying): replace duplicated limit/offset with core Pagination when the
+# Trace HTTP endpoint is migrated to composed query models.
 @dataclass(slots=True)
 class GetTraceForCanonicalSnapshotQuery:
     canonical_snapshot_id: UUID

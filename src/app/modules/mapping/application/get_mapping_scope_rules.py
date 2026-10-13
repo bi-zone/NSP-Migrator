@@ -1,14 +1,13 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
 from app.modules.mapping.domain.entities import (
     MappingEntityResult,
     MappingScope,
     MappingScopeRule,
 )
 from app.modules.mapping.domain.exceptions import MappingModuleNotFoundError
-from app.modules.mapping.ports.uow import MappingUnitOfWorkPort
+from app.modules.mapping.ports.repositories import MappingRepositoryPort
 
 
 @dataclass(slots=True, frozen=True)
@@ -25,11 +24,10 @@ class GetMappingScopeRulesResult:
 class GetMappingScopeRulesUseCase:
     def __init__(
         self,
-        uow: MappingUnitOfWorkPort,
+        mapping_repo: MappingRepositoryPort,
     ) -> None:
-        self.uow = uow
+        self.mapping_repo = mapping_repo
 
-    @async_transactional(read_only=True)
     async def execute(
         self,
         query: GetMappingScopeRulesQuery,
@@ -37,11 +35,9 @@ class GetMappingScopeRulesUseCase:
         """Get list of rules"""
 
         # -- get mapping scope with rules ids
-        mapping_scope: MappingScope | None = (
-            await self.uow.mapping_scope_repo.get_scope_by_id(
-                scope_id=query.mapping_scope_id,
-                with_rules=True,
-            )
+        mapping_scope: MappingScope | None = await self.mapping_repo.get_scope_by_id(
+            scope_id=query.mapping_scope_id,
+            with_rules=True,
         )
         if not mapping_scope:
             raise MappingModuleNotFoundError(
@@ -54,7 +50,7 @@ class GetMappingScopeRulesUseCase:
 
         # -- get results for rules of scope
         mapping_results: list[MappingEntityResult] = (
-            await self.uow.mapping_result_repo.list_by_scope(
+            await self.mapping_repo.list_results(
                 scope_id=mapping_scope.id,
             )
         )

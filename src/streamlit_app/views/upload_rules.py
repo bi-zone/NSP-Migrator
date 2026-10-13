@@ -31,20 +31,25 @@ from streamlit_app.session.context import context_as_dict, get_context
 def render() -> None:
     st.title("Upload")
 
-    mode = st.segmented_control(
-        "Upload mode",
-        options=["Configuration file", "API"],
-        default="Configuration file",
-        label_visibility="collapsed",
-        key="upload_rules_mode",
-    )
+    _render_file_upload()
+    _render_map_uploaded_snapshot_action()
 
-    if mode == "Configuration file":
-        _render_file_upload()
-        _render_map_uploaded_snapshot_action()
-        return
+    # TODO: hide API section (not implemented on backend)
 
-    _render_api_upload()
+    # mode = st.segmented_control(
+    #     "Upload mode",
+    #     options=["Configuration file", "API"],
+    #     default="Configuration file",
+    #     label_visibility="collapsed",
+    #     key="upload_rules_mode",
+    # )
+    #
+    # if mode == "Configuration file":
+    #     _render_file_upload()
+    #     _render_map_uploaded_snapshot_action()
+    #     return
+    #
+    # _render_api_upload()
 
 
 def _render_file_upload() -> None:
@@ -80,7 +85,7 @@ def _render_file_upload() -> None:
             upload_submitted = st.form_submit_button(
                 "Upload",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
 
         st.markdown(
@@ -168,7 +173,7 @@ def _render_api_upload() -> None:
             submit = st.form_submit_button(
                 "Upload",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
             )
 
     if submit:

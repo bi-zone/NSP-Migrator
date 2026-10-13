@@ -36,8 +36,25 @@ def kind_for_protocol(proto: str) -> ObjectKind:
     return ObjectKind.IP_PROTO
 
 
+def service_port_range_label(port_from: int, port_to: int) -> str:
+    """Format a closed port interval; collapse identical bounds to a single port."""
+    if port_from == port_to:
+        return str(port_from)
+    return f"{port_from}-{port_to}"
+
+
+def service_port_label(protocol: str, port_from: int, port_to: int) -> str:
+    """Human-readable L4 name: ``tcp:22`` or ``tcp:1000-2000``."""
+    return f"{protocol}:{service_port_range_label(port_from, port_to)}"
+
+
 def service_object_key(protocol: str, port_from: int, port_to: int) -> str:
-    return f"service:{protocol}:{port_from}-{port_to}"
+    """Stable snapshot key for a materialized TCP/UDP/(tcp-udp) leaf.
+
+    Identical bounds persist as ``service:tcp:22``, not ``service:tcp:22-22``.
+    Semantic identity remains ``(protocol, port_from, port_to)``.
+    """
+    return f"service:{service_port_label(protocol, port_from, port_to)}"
 
 
 def ip_protocol_object_key(protocol: str) -> str:

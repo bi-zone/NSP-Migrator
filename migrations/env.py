@@ -2,25 +2,23 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from app.core.config import settings
-
-# -- Execute module models
-from app.modules.execute.adapters.db.models import *  # noqa: F401, F403
-from app.modules.mapping.adapters.db.models import *  # noqa: F401, F403
+from app.infrastructure.db.base import Base
 
 # -- Canonical module models
-from app.modules.canonical.adapters.db.models import *  # noqa: F401, F403
+from app.modules.canonical.adapters.db.models import *  # noqa: F403
 
 # -- Imports module models
-from app.modules.imports.adapters.db.models import *  # noqa: F401, F403
-
-# -- Common
-from app.modules.trace.adapters.db.models import *  # noqa: F401, F403
+from app.modules.imports.adapters.db.models import *  # noqa: F403
+from app.modules.reports.adapters.db.models import *  # noqa: F403
+from app.modules.settings.csp_profiles.adapters.db.models import *  # noqa: F403
+from app.modules.trace.adapters.db.models import *  # noqa: F403
 
 config = context.config
 

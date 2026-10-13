@@ -1,13 +1,13 @@
 from dependency_injector import containers, providers
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.config import ApplicationSettings
+from app.infrastructure.cache import InMemoryTTLStore
 from app.infrastructure.db.session_factory import SQLAlchemySessionFactory
 from app.infrastructure.http_requester.requester import HttpxRequester
 
 
 class InfrastructureContainer(containers.DeclarativeContainer):
-    config: ApplicationSettings = providers.Configuration()
+    config = providers.Configuration()
 
     # -- Database dependencies
     async_engine = providers.Singleton(
@@ -28,6 +28,13 @@ class InfrastructureContainer(containers.DeclarativeContainer):
     session_factory = providers.Singleton(
         SQLAlchemySessionFactory,
         session_maker=session_maker,
+    )
+
+    # -- Runtime cache dependencies
+    runtime_cache_store = providers.Singleton(
+        InMemoryTTLStore,
+        ttl_seconds=config.runtime_cache.ttl_seconds,
+        max_entries=config.runtime_cache.max_entries,
     )
 
     # -- Http Requester

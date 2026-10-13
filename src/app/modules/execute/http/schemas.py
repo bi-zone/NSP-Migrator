@@ -5,7 +5,16 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.modules.execute.domain.enums import RuleMatchStatus
+from app.modules.execute.domain.enums import (
+    CoverageField,
+    RuleMatchStatus,
+    RulePushStatus,
+)
+
+
+class ExcludedExistingRuleResponse(BaseModel):
+    sdwan_rule_id: int
+    reason: str
 
 
 class BaseResponseSchema(BaseModel):
@@ -25,9 +34,11 @@ class PreparedExecutePlanResponse(BaseResponseSchema):
     matched_rules: int
     covered_rules: int
     errors_through_match: int
+    excluded_existing_rules: list[ExcludedExistingRuleResponse]
 
 
 class PlannedRuleDraftResponse(BaseResponseSchema):
+    name: str
     action: str
     src_zones: list[int]
     dst_zones: list[int]
@@ -36,14 +47,31 @@ class PlannedRuleDraftResponse(BaseResponseSchema):
     services: list[int]
 
 
+class CoverageValueResponse(BaseResponseSchema):
+    object_id: int
+    object_name: str
+    value: str
+
+
+class CoverageDetailResponse(BaseResponseSchema):
+    field: CoverageField
+    covering_value: CoverageValueResponse
+    covered_values: list[CoverageValueResponse]
+
+
 class ExecutePlanRuleResponse(BaseResponseSchema):
     id: UUID
     execute_plan_id: UUID
     mapping_scope_rule_id: UUID
+    priority: int
     draft: PlannedRuleDraftResponse
     matched_sdwan_rule_id: int | None
     match_status: RuleMatchStatus
     match_info: str
+    coverage_details: list[CoverageDetailResponse]
+    push_status: RulePushStatus
+    pushed_sdwan_rule_id: int | None
+    push_error: str | None
 
 
 # -- Rules read schemas (duplicated from sdwan integration)
@@ -93,3 +121,15 @@ class SdwanRuleResponse(BaseResponseSchema):
 
     src_idents: list[Any]
     dst_idents: list[Any]
+
+
+class PushRuleResultResponse(BaseResponseSchema):
+    execute_plan_rule_id: UUID
+    rule_name: str
+    sdwan_rule_id: int | None
+    error: str | None
+
+
+class PushExecutePlanRulesResponse(BaseResponseSchema):
+    rules: list[SdwanRuleResponse]
+    push_results: list[PushRuleResultResponse]

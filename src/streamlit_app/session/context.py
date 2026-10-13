@@ -16,6 +16,8 @@ class SessionContext:
     execute_plan_id: UUID | None = None
     selected_canonical_rule_ids: list[str] | None = None
     migration_name: str | None = None
+    selected_csp_profile_id: UUID | None = None
+    selected_vpc_id: str | None = None
     selected_sdwan_target_id: str | None = None
 
 

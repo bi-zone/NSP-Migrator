@@ -8,6 +8,25 @@ class RuleMatchStatus(StrEnum):
     MATCH_ERROR = "MATCH_ERROR"
 
 
+class RulePushStatus(StrEnum):
+    PENDING = "PENDING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class ExecutePlanPushStatus(StrEnum):
+    PENDING = "PENDING"
+    EXECUTED = "EXECUTED"
+
+
+class CoverageField(StrEnum):
+    """Rule field whose planned values are covered by an existing policy."""
+
+    SRC_ADDR_OBJECTS = "SRC_ADDR_OBJECTS"
+    DST_ADDR_OBJECTS = "DST_ADDR_OBJECTS"
+    SERVICES = "SERVICES"
+
+
 class SdwanRuleAction(StrEnum):
     ACCEPT = "ACCEPT"
     REJECT = "REJECT"

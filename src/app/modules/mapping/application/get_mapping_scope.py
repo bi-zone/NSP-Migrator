@@ -1,10 +1,9 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
 from app.modules.mapping.domain.entities import MappingScope
 from app.modules.mapping.domain.exceptions import MappingModuleNotFoundError
-from app.modules.mapping.ports.uow import MappingUnitOfWorkPort
+from app.modules.mapping.ports.repositories import MappingRepositoryPort
 
 
 @dataclass(slots=True, frozen=True)
@@ -21,22 +20,19 @@ class GetMappingScopeResult:
 class GetMappingScopeUseCase:
     def __init__(
         self,
-        uow: MappingUnitOfWorkPort,
+        mapping_repo: MappingRepositoryPort,
     ) -> None:
-        self.uow = uow
+        self.mapping_repo = mapping_repo
 
-    @async_transactional(read_only=True)
     async def execute(
         self,
         query: GetMappingScopeQuery,
     ) -> GetMappingScopeResult:
         """Get mapping scope data"""
 
-        mapping_scope: MappingScope | None = (
-            await self.uow.mapping_scope_repo.get_scope_by_id(
-                scope_id=query.mapping_scope_id,
-                with_rules=query.with_rules,
-            )
+        mapping_scope: MappingScope | None = await self.mapping_repo.get_scope_by_id(
+            scope_id=query.mapping_scope_id,
+            with_rules=query.with_rules,
         )
         if not mapping_scope:
             raise MappingModuleNotFoundError(

@@ -1,12 +1,12 @@
-from pydantic import computed_field
+from typing import Self
+
+from pydantic import Field, SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.config.csp_credentials import CSPCredentialsConfig
 from app.core.config.database import DatabaseConfig
-from app.core.config.integrations.sdwan_csp_api import (
-    IntegrationsConfig,
-    SDWANCspApiConfig,
-)
 from app.core.config.log import LogConfig
+from app.core.config.runtime_cache import RuntimeCacheConfig
 from app.core.config.server import ServerConfig
 from app.core.config.tracer import TracerConfig
 
@@ -33,6 +33,8 @@ class ApplicationSettings(BaseSettings):
     db_echo: bool = False
     db_pool_size: int = 5
     db_max_overflow: int = 10
+    runtime_cache_ttl_hours: int = Field(default=24, gt=0)
+    runtime_cache_max_entries: int = Field(default=10_000, gt=0)
 
     db_host: str = "localhost"
     db_port: int = 5432
@@ -40,11 +42,16 @@ class ApplicationSettings(BaseSettings):
     db_password: str = "postgres"
     db_name: str = "policy_migrator"
 
-    sdwan_csp_api_url: str = "https://csp.service"
-    sdwan_csp_cert: str = "/app/client_cert.pem"
-    sdwan_csp_username: str = "admin"
-    sdwan_csp_password: str = "admin"
-    sdwan_vpc_id: str = ""
+    csp_master_key: SecretStr = Field(
+        default_factory=lambda: _missing_csp_setting("APP_CSP_MASTER_KEY")
+    )
+
+    @model_validator(mode="after")
+    def validate_csp_credentials(self) -> Self:
+        CSPCredentialsConfig.from_settings(
+            active_key=self.csp_master_key,
+        )
+        return self
 
     @computed_field  # Required for DI correct config parsing!
     @property
@@ -78,6 +85,14 @@ class ApplicationSettings(BaseSettings):
 
     @computed_field
     @property
+    def runtime_cache(self) -> RuntimeCacheConfig:
+        return RuntimeCacheConfig(
+            ttl_hours=self.runtime_cache_ttl_hours,
+            max_entries=self.runtime_cache_max_entries,
+        )
+
+    @computed_field
+    @property
     def log(self) -> LogConfig:
         return LogConfig(level=self.log_level)
 
@@ -88,13 +103,11 @@ class ApplicationSettings(BaseSettings):
 
     @computed_field
     @property
-    def integrations(self) -> IntegrationsConfig:
-        return IntegrationsConfig(
-            sdwan_csp_api=SDWANCspApiConfig(
-                base_url=self.sdwan_csp_api_url,
-                cert_path=self.sdwan_csp_cert,
-                username=self.sdwan_csp_username,
-                password=self.sdwan_csp_password,
-                vpc_id=self.sdwan_vpc_id,
-            ),
+    def csp_credentials(self) -> CSPCredentialsConfig:
+        return CSPCredentialsConfig.from_settings(
+            active_key=self.csp_master_key,
         )
+
+
+def _missing_csp_setting(name: str):
+    raise ValueError(f"Required CSP credential setting is missing: {name}")

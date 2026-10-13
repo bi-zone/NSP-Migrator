@@ -71,6 +71,7 @@ class MappingScopeRulesBuilder:
                 canonical_rule_id=rule.id,
                 name=rule.name,
                 action=self._map_rule_action(rule.action),
+                priority=rule.priority,
                 operands_payloads=self._build_rule_operand_payloads(
                     rule=rule,
                     results_index=results_index,

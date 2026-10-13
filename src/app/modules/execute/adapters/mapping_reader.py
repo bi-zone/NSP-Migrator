@@ -1,5 +1,6 @@
 from uuid import UUID
 
+from app.integrations.sdwan_csp_api.gateways.enums import SdwanRulePriority
 from app.modules.execute.errors import ExecuteModuleError
 from app.modules.execute.ports.mapping_reader.port import MappingReaderPort
 from app.modules.execute.ports.mapping_reader.schemas import (
@@ -59,7 +60,7 @@ class MappingReader(MappingReaderPort):
 
         mapped_rules_data: list[MappedRuleData] = []
 
-        for mapped_rule in result.rules:
+        for mapped_rule in sorted(result.rules, key=lambda rule: rule.priority):
             rule_entities_ids_by_role: dict[MappingScopeRuleOperandRole, list[int]] = {
                 MappingScopeRuleOperandRole.SRC_ZONE: [],
                 MappingScopeRuleOperandRole.DST_ZONE: [],
@@ -91,10 +92,24 @@ class MappingReader(MappingReaderPort):
                     mapping_result.selected_sdwan_entity_id
                 )
 
+            # policy validation by objects roles
+            missing_roles: list[str] = [
+                str(role.value)
+                for role, entity_ids in rule_entities_ids_by_role.items()
+                if not entity_ids
+            ]
+            if missing_roles:
+                raise ExecuteModuleError(
+                    f"Mapped rule {mapped_rule.id} has no selected SD-WAN "
+                    f"objects for required roles: {', '.join(missing_roles)}"
+                )
+
             mapped_rules_data.append(
                 MappedRuleData(
                     id=mapped_rule.id,
+                    name=mapped_rule.name,
                     action=MappedRuleDataAction(mapped_rule.action),
+                    priority=mapped_rule.priority,
                     src_zones=rule_entities_ids_by_role[
                         MappingScopeRuleOperandRole.SRC_ZONE
                     ],
@@ -122,5 +137,10 @@ class MappingReader(MappingReaderPort):
         )
         return MappingScopeData(
             id=result.mapping_scope.id,
+            title=result.mapping_scope.title,
+            csp_profile_id=result.mapping_scope.csp_profile_id,
+            vpc_id=result.mapping_scope.vpc_id,
             sdwan_target_id=result.mapping_scope.sdwan_target_id,
+            rules_priority=SdwanRulePriority(result.mapping_scope.rules_priority),
+            catalog_fingerprint=result.mapping_scope.catalog_fingerprint,
         )

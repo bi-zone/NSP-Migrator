@@ -1,4 +1,5 @@
 import ssl
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -20,7 +21,9 @@ class HttpxRequester(IAsyncHttpRequester):
         verify_server_ssl: bool | ssl.SSLContext = True,
         cert_path: str | None = None,
         timeout: float = 20.0,
+        owned_cert_path: str | None = None,
     ) -> None:
+        self._owned_cert_path = Path(owned_cert_path) if owned_cert_path else None
         self._client = httpx.AsyncClient(
             verify=verify_server_ssl,
             cert=cert_path,
@@ -63,3 +66,11 @@ class HttpxRequester(IAsyncHttpRequester):
             raise HttpRequestTransportError() from exc
 
         return response.json()
+
+    async def aclose(self) -> None:
+        try:
+            await self._client.aclose()
+        finally:
+            if self._owned_cert_path is not None:
+                self._owned_cert_path.unlink(missing_ok=True)
+                self._owned_cert_path = None

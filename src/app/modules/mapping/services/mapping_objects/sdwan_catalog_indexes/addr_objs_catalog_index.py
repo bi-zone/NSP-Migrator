@@ -1,3 +1,4 @@
+import logging
 from collections import defaultdict
 from ipaddress import IPv4Address, IPv4Network
 
@@ -13,6 +14,8 @@ from app.modules.mapping.services.mapping_objects.normalizer import (
     normalize_fqdn,
     normalize_name,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SdwanAddrObjsCatalogIndex:
@@ -85,7 +88,6 @@ class SdwanAddrObjsCatalogIndex:
     def _build_indexes(self) -> None:
 
         for addr in self._addr_objects:
-
             self._addr_by_name[normalize_name(addr.name)].append(addr)
 
             if addr.type == SdwanAddrObjectType.HOST and addr.host is not None:

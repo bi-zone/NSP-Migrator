@@ -20,7 +20,6 @@ from app.modules.mapping.services.mapping_objects.sdwan_catalog_indexes.services
 
 _SERVICE_BY_SIGNATURE_SCORE = 100
 _SERVICE_BY_BUILTIN_ANY_SCORE = 100
-_SERVICE_BY_NAME_SCORE = 70
 
 
 class ServiceMatcher:
@@ -34,7 +33,7 @@ class ServiceMatcher:
     def match(self, service: CanonicalService) -> list[MappingEntityCandidatePayload]:
         match service.kind:
             case CanonicalServiceKind.ANY_SERVICE:
-                return self._match_any_service(service)
+                return self._match_any_service()
 
             case CanonicalServiceKind.TCP:
                 return self._match_l4_service(
@@ -60,10 +59,7 @@ class ServiceMatcher:
             case _:
                 return []
 
-    def _match_any_service(
-        self,
-        service: CanonicalService,
-    ) -> list[MappingEntityCandidatePayload]:
+    def _match_any_service(self) -> list[MappingEntityCandidatePayload]:
         candidates: list[CandidateDraft] = []
 
         for sdwan_service in self._catalog_index.find_builtin_any_services():
@@ -74,8 +70,6 @@ class ServiceMatcher:
                     CandidateMatchStrategy.BUILTIN_ANY,
                 )
             )
-
-        candidates.extend(self._match_by_name(service.name))
 
         return CandidateFinalizer.finalize(candidates)
 
@@ -102,8 +96,6 @@ class ServiceMatcher:
                     )
                 )
 
-        candidates.extend(self._match_by_name(service.name))
-
         return CandidateFinalizer.finalize(candidates)
 
     def _match_icmp_service(
@@ -123,47 +115,15 @@ class ServiceMatcher:
                     )
                 )
 
-        candidates.extend(self._match_by_name(service.name))
-
         return CandidateFinalizer.finalize(candidates)
 
     def _match_ip_proto_service(
         self,
         service: CanonicalService,
     ) -> list[MappingEntityCandidatePayload]:
-        """
-        Match IP protocol service. EXPERIMENTAL
-
-        This is intentionally conservative because SD-WAN service representation
-        may differ for non-TCP/UDP/ICMP protocols. For now we use only name and
-        optional protocol alias.
-        """
-        candidates = self._match_by_name(service.name)
-
-        if service.protocol:
-            for sdwan_service in self._catalog_index.find_services_by_name(
-                service.protocol
-            ):
-                candidates.append(
-                    self._candidate(
-                        sdwan_service,
-                        80,
-                        CandidateMatchStrategy.SERVICE_ALIAS,
-                    )
-                )
-
-        return CandidateFinalizer.finalize(candidates)
-
-    def _match_by_name(self, name: str) -> list[CandidateDraft]:
-        # return [
-        #     self._candidate(
-        #         sdwan_service,
-        #         _SERVICE_BY_NAME_SCORE,
-        #         CandidateMatchStrategy.NORMALIZED_NAME,
-        #     )
-        #     for sdwan_service in self._catalog_index.find_services_by_name(name)
-        # ]
-        # TODO: not using search by name now
+        # TODO: Add explicit protocol mappings only after canonical IP protocol
+        # semantics and their exact SD-WAN service equivalents are confirmed.
+        # A protocol or service name match is not sufficient evidence of equivalence.
         return []
 
     @staticmethod

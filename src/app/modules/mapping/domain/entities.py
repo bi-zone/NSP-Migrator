@@ -10,6 +10,7 @@ from app.modules.mapping.domain.enums import (
     MappingResultStatus,
     MappingScopeRuleAction,
     MappingScopeRuleOperandRole,
+    MappingScopeRulesPriority,
     SdwanObjectSelectionMethod,
 )
 from app.modules.mapping.domain.value_objects import (
@@ -63,6 +64,7 @@ class MappingScopeRule:
 
     name: str
     action: MappingScopeRuleAction
+    priority: int
 
     operands: list[MappingScopeRuleOperand] | None
 
@@ -74,6 +76,7 @@ class MappingScopeRule:
         canonical_rule_id: UUID,
         name: str,
         action: MappingScopeRuleAction,
+        priority: int,
         operands_payloads: list[MappingScopeRuleOperandPayload],
     ) -> Self:
         rule_id = uuid4()
@@ -84,6 +87,7 @@ class MappingScopeRule:
             canonical_rule_id=canonical_rule_id,
             name=name,
             action=action,
+            priority=priority,
             operands=[
                 MappingScopeRuleOperand.create(
                     mapping_scope_rule_id=rule_id,
@@ -101,7 +105,11 @@ class MappingScope:
     id: UUID
     title: str
     canonical_snapshot_id: UUID
+    csp_profile_id: UUID
+    vpc_id: str
     sdwan_target_id: str
+    rules_priority: MappingScopeRulesPriority
+    catalog_fingerprint: str
     created_at: datetime
     rules: list[MappingScopeRule] | None = None
 
@@ -111,7 +119,11 @@ class MappingScope:
         *,
         title: str,
         canonical_snapshot_id: UUID,
+        csp_profile_id: UUID,
+        vpc_id: str,
         sdwan_target_id: str,
+        rules_priority: MappingScopeRulesPriority,
+        catalog_fingerprint: str,
     ) -> Self:
         """
         Create scope header.
@@ -123,13 +135,21 @@ class MappingScope:
             id=uuid4(),
             title=title,
             canonical_snapshot_id=canonical_snapshot_id,
+            csp_profile_id=csp_profile_id,
+            vpc_id=vpc_id,
             sdwan_target_id=sdwan_target_id,
+            rules_priority=rules_priority,
+            catalog_fingerprint=catalog_fingerprint,
             created_at=get_utc_now(),
             rules=None,
         )
 
     def attach_rules(self, rules: list[MappingScopeRule]) -> Self:
         return replace(self, rules=rules)
+
+    def refresh_catalog_fingerprint(self, catalog_fingerprint: str) -> Self:
+        """Accept the catalog state produced by an intentional mapping write."""
+        return replace(self, catalog_fingerprint=catalog_fingerprint)
 
 
 @dataclass(frozen=True, slots=True)

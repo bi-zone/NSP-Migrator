@@ -131,3 +131,60 @@ access-group OUTSIDE_IN global
         if operand.rule_id == rule.id and operand.operand_role == OperandRole.DST_OBJECT
     )
     assert dst_operand.target_object_id == web_server.id
+
+
+def test_reopened_network_object_dynamic_nat_keeps_canonical_subnet() -> None:
+    outcome = _normalize(
+        """
+object network INSIDE1_NET
+ description Users VLAN 10
+ subnet 192.168.1.0 255.255.255.0
+!
+object network INSIDE1_NET
+ nat (inside1,outside) dynamic interface
+!
+access-list TEST extended permit ip object INSIDE1_NET any
+access-group TEST global
+"""
+    )
+    objects_by_key = {obj.object_key: obj for obj in outcome.canonical.objects}
+    inside = objects_by_key["addr:INSIDE1_NET"]
+
+    assert inside.object_kind == ObjectKind.SUBNET
+    assert inside.cidr == "192.168.1.0/24"
+    assert inside.name == "INSIDE1_NET"
+    assert "addr:unresolved:INSIDE1_NET" not in objects_by_key
+    assert [
+        obj.object_key
+        for obj in outcome.canonical.objects
+        if "INSIDE1_NET" in obj.object_key
+    ] == ["addr:INSIDE1_NET"]
+
+    rule = outcome.canonical.rules[0]
+    src_operand = next(
+        operand
+        for operand in outcome.canonical.operands
+        if operand.rule_id == rule.id and operand.operand_role == OperandRole.SRC_OBJECT
+    )
+    assert src_operand.target_object_id == inside.id
+
+
+def test_nat_only_network_object_without_address_is_unresolved() -> None:
+    outcome = _normalize(
+        """
+object network NAT_ONLY
+ nat (inside,outside) dynamic interface
+access-list ACL_IN extended permit ip object NAT_ONLY any
+access-group ACL_IN in interface inside
+interface inside
+ nameif inside
+"""
+    )
+    obj = next(
+        item
+        for item in outcome.canonical.objects
+        if item.object_key == "addr:NAT_ONLY"
+    )
+
+    assert obj.object_kind == ObjectKind.UNRESOLVED_ADDR
+    assert obj.cidr is None

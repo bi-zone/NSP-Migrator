@@ -1,0 +1,1 @@
+"""Persistent migration-report snapshots."""

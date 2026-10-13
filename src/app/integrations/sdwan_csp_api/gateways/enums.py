@@ -2,7 +2,6 @@ from enum import StrEnum
 
 
 class SdwanZoneType(StrEnum):
-
     LAN = "lan"
     WAN = "wan"
     WGD = "wgd"
@@ -10,7 +9,6 @@ class SdwanZoneType(StrEnum):
 
 
 class SdwanServiceL4Proto(StrEnum):
-
     TCP = "tcp"
     UDP = "udp"
     ICMP = "icmp"
@@ -19,7 +17,6 @@ class SdwanServiceL4Proto(StrEnum):
 
 
 class SdwanAddrObjectType(StrEnum):  # imported from sdwan integration schema
-
     PREFIX = "prefix"
     HOST = "host"
     FQDN = "fqdn"
@@ -29,6 +26,11 @@ class SdwanAddrObjectType(StrEnum):  # imported from sdwan integration schema
 
 
 class SdwanDeviceObjectType(StrEnum):
-
     DEVICE = "device"
     GROUP = "group"
+
+
+class SdwanRulePriority(StrEnum):
+    LOCAL = "local"  # for Device (CPE)
+    PRE = "pre"  # for Group
+    POST = "post"  # for Group

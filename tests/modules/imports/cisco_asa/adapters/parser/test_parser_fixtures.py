@@ -92,7 +92,10 @@ def test_tc_02_acl_object_network_refs():
     assert obj.payload["ip"] == "10.10.10.10"
     assert obj.source_line == 1
     assert obj.source_line_end == 2
-    assert obj.source_fragment == ("object network OBJ_APP\n host 10.10.10.10")
+    assert obj.source_fragment == (
+        "object network OBJ_APP\n"
+        " host 10.10.10.10"
+    )
     assert parsed.rules[0].src_ref == "OBJ_APP"
 
 
@@ -115,8 +118,46 @@ access-group OUTSIDE_IN global
     assert len(web_server_objects) == 1
     assert web_server_objects[0].payload["type"] == "host"
     assert web_server_objects[0].payload["ip"] == "10.0.0.2"
+    assert web_server_objects[0].payload["raw_lines"] == [
+        "nat (DMZ,outside) static 100.1.1.2"
+    ]
     assert web_server_objects[0].source_fragment == (
-        "object network WEB_SERVER\n description Public web server\n host 10.0.0.2"
+        "object network WEB_SERVER\n"
+        " description Public web server\n"
+        " host 10.0.0.2"
+    )
+
+
+def test_reopened_network_object_dynamic_nat_preserves_subnet():
+    cfg = """
+object network INSIDE1_NET
+ description Users VLAN 10
+ subnet 192.168.1.0 255.255.255.0
+!
+object network INSIDE1_NET
+ nat (inside1,outside) dynamic interface
+!
+access-list TEST extended permit ip object INSIDE1_NET any
+access-group TEST global
+"""
+
+    parsed = CiscoAsaParserAdapter().parse(cfg)
+    inside_objects = [
+        item for item in parsed.address_objects if item.name == "INSIDE1_NET"
+    ]
+
+    assert len(inside_objects) == 1
+    assert inside_objects[0].payload["type"] == "subnet"
+    assert inside_objects[0].payload["ip"] == "192.168.1.0"
+    assert inside_objects[0].payload["mask"] == "255.255.255.0"
+    assert inside_objects[0].payload["description"] == "Users VLAN 10"
+    assert inside_objects[0].payload["raw_lines"] == [
+        "nat (inside1,outside) dynamic interface"
+    ]
+    assert inside_objects[0].source_fragment == (
+        "object network INSIDE1_NET\n"
+        " description Users VLAN 10\n"
+        " subnet 192.168.1.0 255.255.255.0"
     )
 
 
@@ -135,7 +176,9 @@ def test_tc_04_service_group_in_acl():
     assert group.source_line == 1
     assert group.source_line_end == 3
     assert group.source_fragment == (
-        "object-group service WEB_PORTS tcp\n port-object eq www\n port-object eq https"
+        "object-group service WEB_PORTS tcp\n"
+        " port-object eq www\n"
+        " port-object eq https"
     )
 
 
@@ -173,7 +216,8 @@ def test_tc_19_object_service_payload():
     assert svc.source_line == 1
     assert svc.source_line_end == 2
     assert svc.source_fragment == (
-        "object service SVC_RDP\n service tcp destination eq 3389"
+        "object service SVC_RDP\n"
+        " service tcp destination eq 3389"
     )
 
 

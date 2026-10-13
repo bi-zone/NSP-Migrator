@@ -25,19 +25,26 @@ from app.modules.mapping.domain.enums import (
     MappingEntityType,
     MappingScopeRuleOperandRole,
 )
+from app.modules.trace.application.dto import TraceRecordDTO
 from streamlit_app.components.mapped_rules.cache import (
     invalidate_after_mapping_result_mutation,
+    load_cached_canonical_object_evidence,
     load_cached_mapping_result_details,
     load_cached_sdwan_catalog_rows,
+)
+from streamlit_app.components.mapped_rules.canonical_evidence import (
+    CanonicalObjectEvidence,
+    CanonicalObjectFieldRow,
+    build_canonical_object_field_rows,
 )
 from streamlit_app.components.mapped_rules.utils import (
     ROLE_FIELD_BY_ROLE,
     SELECTED_MAPPED_RULE_ID_KEY,
-    STATUS_CELL_STYLE,
     MappedRulesProjectionState,
     StatusStyleColor,
     dash,
     short_uuid,
+    status_cell_style,
     status_color_for_mapping_result,
 )
 from streamlit_app.services.use_cases import (
@@ -165,6 +172,8 @@ def render_mapping_details(state: MappedRulesProjectionState) -> None:
         _render_mapping_detail_section(
             section=section,
             details=details,
+            mapping_scope_id=state.mapping_scope_id,
+            canonical_snapshot_id=state.projection.canonical_snapshot_id,
         )
         st.markdown("---")
 
@@ -173,6 +182,8 @@ def _render_mapping_detail_section(
     *,
     section: MappingDetailSectionConfig,
     details: MappingCanonicalRuleProjectionDTO,
+    mapping_scope_id: UUID,
+    canonical_snapshot_id: UUID,
 ) -> None:
     st.markdown(f"##### {section.title}")
 
@@ -206,15 +217,28 @@ def _render_mapping_detail_section(
 
     try:
         selected_result_details = load_cached_mapping_result_details(
-            UUID(selected_mapping_result_id)
+            mapping_scope_id=mapping_scope_id,
+            mapping_result_id=UUID(selected_mapping_result_id),
         )
     except Exception as error:
         st.error(f"Failed to load selected mapping result: {error}")
         return
 
+    canonical_evidence: CanonicalObjectEvidence | None = None
+    if selected_result_details.canonical_entity_id is not None:
+        try:
+            canonical_evidence = load_cached_canonical_object_evidence(
+                canonical_snapshot_id=canonical_snapshot_id,
+                canonical_entity_id=selected_result_details.canonical_entity_id,
+            )
+        except Exception as error:
+            st.warning(f"Failed to load canonical source details: {error}")
+
     _render_selected_mapping_result_editor(
         details=selected_result_details,
         section=section,
+        canonical_evidence=canonical_evidence,
+        mapping_scope_id=mapping_scope_id,
     )
 
 
@@ -290,14 +314,14 @@ def _render_mapped_entities_table(
         st.session_state[selection_state_key] = (
             selected_entity_id if selected_entity_id != "—" else None
         )
-    else:
-        st.session_state.pop(selection_state_key, None)
 
-    selected_entity_id = st.session_state.get(selection_state_key)
-    if selected_entity_id:
-        st.caption(f"Selected mapping result: {short_id(selected_entity_id)}")
+    selected_entity_id_value = st.session_state.get(selection_state_key)
+    if not isinstance(selected_entity_id_value, str):
+        selected_entity_id_value = None
+    if selected_entity_id_value:
+        st.caption(f"Selected mapping result: {short_id(selected_entity_id_value)}")
 
-    return str(selected_entity_id) if selected_entity_id else None
+    return selected_entity_id_value
 
 
 def _build_canonical_rows(
@@ -374,7 +398,7 @@ def _sdwan_label(entity: MappedSdwanEntityDisplayDTO) -> str:
     return f"{entity.name} ({dash(entity.type)} #{entity.sdwan_id})"
 
 
-def _mapped_table_column_config() -> dict[str, ColumnConfig]:
+def _mapped_table_column_config() -> dict[str, ColumnConfig | None]:
     return {
         "status": st.column_config.TextColumn("Status", width="medium"),
         "strategy": st.column_config.TextColumn("Selection", width="medium"),
@@ -394,7 +418,7 @@ def _style_mapped_entities_dataframe(
     def apply_row_style(row: pd.Series) -> list[str]:
         row_index = int(df.index.get_loc(row.name))
         status_kind: StatusStyleColor = status_by_row[row_index]
-        status_style = STATUS_CELL_STYLE[status_kind]
+        status_style = status_cell_style(status_kind)
         return [status_style if column == "status" else "" for column in row.index]
 
     return df.style.apply(apply_row_style, axis=1)
@@ -404,6 +428,8 @@ def _render_selected_mapping_result_editor(
     *,
     details: MappingEntityResultDetailsDTO,
     section: MappingDetailSectionConfig,
+    canonical_evidence: CanonicalObjectEvidence | None,
+    mapping_scope_id: UUID,
 ) -> None:
     if details.entity_type != section.entity_type:
         st.warning(
@@ -413,13 +439,65 @@ def _render_selected_mapping_result_editor(
         return
 
     st.markdown(f"###### Selected {section.title.lower()} mapping result")
+    if canonical_evidence is not None:
+        _render_canonical_object_evidence(canonical_evidence)
+
     candidate_tab, direct_tab = st.tabs(["Candidates", "Assign directly"])
 
     with candidate_tab:
         _render_candidate_selector(details, section)
 
     with direct_tab:
-        _render_direct_assign(details, section)
+        _render_direct_assign(details, section, mapping_scope_id)
+
+
+def _render_canonical_object_evidence(evidence: CanonicalObjectEvidence) -> None:
+    st.markdown("###### Canonical object")
+    field_rows: list[CanonicalObjectFieldRow] = build_canonical_object_field_rows(
+        evidence.canonical_object
+    )
+    st.dataframe(
+        pd.DataFrame(asdict(row) for row in field_rows),
+        width="stretch",
+        hide_index=True,
+        column_order=("field", "value"),
+        column_config={
+            "field": st.column_config.TextColumn("Field", width="medium"),
+            "value": st.column_config.TextColumn("Value", width="large"),
+        },
+    )
+
+    st.markdown("###### Source lines")
+    if not evidence.trace_records:
+        st.info("No source lines recorded for this canonical object.")
+        return
+
+    first_record, *other_records = evidence.trace_records
+    _render_trace_record(first_record)
+
+    if other_records:
+        with st.expander(f"Show other lines ({len(other_records)})"):
+            for record in other_records:
+                _render_trace_record(record)
+
+
+def _render_trace_record(record: TraceRecordDTO) -> None:
+    if record.source_line_start == record.source_line_end:
+        line_label = f"Line {record.source_line_start}"
+    else:
+        line_label = f"Lines {record.source_line_start}-{record.source_line_end}"
+
+    metadata = [line_label]
+    if record.canonical_role:
+        metadata.append(f"role: {record.canonical_role}")
+    if record.note:
+        metadata.append(record.note)
+    st.caption(" | ".join(metadata))
+
+    if record.source_fragment:
+        st.code(record.source_fragment, language=None)
+    else:
+        st.caption("Source fragment is not available.")
 
 
 def _render_candidate_selector(
@@ -483,6 +561,7 @@ def _render_candidate_selector(
                 run_async(
                     get_select_entity_candidate().execute(
                         SelectEntityCandidateCommand(
+                            mapping_scope_id=details.mapping_scope_id,
                             mapping_entity_result_id=details.mapping_result_id,
                             candidate_id=UUID(candidate_id),
                         )
@@ -508,8 +587,12 @@ def _render_candidate_selector(
 def _render_direct_assign(
     details: MappingEntityResultDetailsDTO,
     section: MappingDetailSectionConfig,
+    mapping_scope_id: UUID,
 ) -> None:
-    rows = load_cached_sdwan_catalog_rows(section.entity_type)
+    rows = load_cached_sdwan_catalog_rows(
+        entity_type=section.entity_type,
+        mapping_scope_id=mapping_scope_id,
+    )
     if not rows:
         st.info(f"No SD-WAN entities found for {section.title.lower()}.")
         return
@@ -572,6 +655,7 @@ def _render_direct_assign(
                 run_async(
                     get_select_sdwan_entity_directly().execute(
                         SelectSdwanEntityDirectlyCommand(
+                            mapping_scope_id=details.mapping_scope_id,
                             mapping_result_id=details.mapping_result_id,
                             sdwan_entity_id=int(direct_assign_item_id),  # type: ignore
                         )

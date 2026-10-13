@@ -2,6 +2,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from app.core.logging import configure_logging
 from streamlit_app.views import (
     canonical_rules,
     execute_rules,
@@ -23,6 +24,10 @@ def _inject_custom_css() -> None:
 
 
 def main() -> None:
+    # -- core configs
+    configure_logging()
+
+    # -- streamlit configs
     st.set_page_config(
         page_title="Rules Migrator",
         page_icon="🛡️",
@@ -76,11 +81,6 @@ def main() -> None:
             url_path="settings",
         ),
     ]
-
-    with st.sidebar:
-        st.markdown(
-            '<div class="username-box">&lt;Username&gt;</div>', unsafe_allow_html=True
-        )
 
     navigation = st.navigation(pages)
     navigation.run()

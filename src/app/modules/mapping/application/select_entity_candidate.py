@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
 from app.modules.mapping.domain.entities import (
     MappingEntityCandidate,
     MappingEntityResult,
@@ -10,40 +9,37 @@ from app.modules.mapping.domain.exceptions import (
     MappingModuleDomainValidationError,
     MappingModuleNotFoundError,
 )
-from app.modules.mapping.ports.uow import MappingUnitOfWorkPort
+from app.modules.mapping.ports.repositories import MappingRepositoryPort
 
 
 @dataclass(frozen=True, slots=True)
 class SelectEntityCandidateCommand:
-
+    mapping_scope_id: UUID
     mapping_entity_result_id: UUID
     candidate_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
 class SelectEntityCandidateResult:
-
     mapping_entity_result: MappingEntityResult
 
 
 class SelectEntityCandidateUseCase:
     def __init__(
         self,
-        uow: MappingUnitOfWorkPort,
+        mapping_repo: MappingRepositoryPort,
     ) -> None:
-        self.uow = uow
+        self.mapping_repo = mapping_repo
 
-    @async_transactional(read_only=False)
     async def execute(
         self,
         command: SelectEntityCandidateCommand,
     ) -> SelectEntityCandidateResult:
 
-        mapping_result: MappingEntityResult | None = (
-            await self.uow.mapping_result_repo.get_result_by_id(
-                result_id=command.mapping_entity_result_id,
-                with_candidates=True,
-            )
+        mapping_result: MappingEntityResult | None = await self.mapping_repo.get_result(
+            scope_id=command.mapping_scope_id,
+            result_id=command.mapping_entity_result_id,
+            with_candidates=True,
         )
         if not mapping_result:
             raise MappingModuleNotFoundError(
@@ -77,6 +73,6 @@ class SelectEntityCandidateUseCase:
         updated_mapping_result: MappingEntityResult = mapping_result.select_candidate(
             candidate=selected_candidate
         )
-        await self.uow.mapping_result_repo.save_result(updated_mapping_result)
+        await self.mapping_repo.save_result(updated_mapping_result)
 
         return SelectEntityCandidateResult(mapping_entity_result=updated_mapping_result)

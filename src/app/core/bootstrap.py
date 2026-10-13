@@ -11,6 +11,9 @@ from app.core.fastapi.metrics import register_metrics
 from app.core.fastapi.tracer import RequestIdMiddleware
 from app.core.logging import configure_logging
 from app.di.container import create_di_container
+from app.modules.settings.csp_profiles.http.exception_handlers import (
+    register_csp_profile_exception_handlers,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,10 @@ def create_application(router: APIRouter) -> FastAPI:
                 "db_migrations": "alembic",
             },
         )
-        yield
+        try:
+            yield
+        finally:
+            await di_container.integrations().sdwan_client_provider().close_all()
 
     app = FastAPI(
         title=settings.server.name,
@@ -62,6 +68,7 @@ def create_application(router: APIRouter) -> FastAPI:
     app.add_middleware(RequestIdMiddleware, header_name=settings.tracer.header_name)
     register_metrics(app)
     register_exception_handlers(app)
+    register_csp_profile_exception_handlers(app)
     app.include_router(router)
 
     return app

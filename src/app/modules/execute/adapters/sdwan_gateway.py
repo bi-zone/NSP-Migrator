@@ -1,25 +1,47 @@
-from datetime import datetime
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from uuid import UUID
 
+from app.integrations.sdwan_csp_api.client_provider import SDWANClientProvider
+from app.integrations.sdwan_csp_api.gateways.catalog import SDWANCatalogGateway
+from app.integrations.sdwan_csp_api.gateways.enums import SdwanRulePriority
+from app.integrations.sdwan_csp_api.gateways.models import (
+    SdwanDeviceObject,
+    SdwanFullCatalog,
+)
 from app.integrations.sdwan_csp_api.gateways.ports import SDWANCatalogGatewayPort
 from app.integrations.sdwan_csp_api.interfaces import ISDWANCspHttpClient
 from app.integrations.sdwan_csp_api.schemas import (
+    CommitDataResponse,
     CreatePolicyRequest,
+    DeviceObjectType,
+    PolicyPlacementPriority,
     PolicyResponse,
     RuleAction,
 )
+from app.modules.common.domain.utils import get_utc_now
 from app.modules.execute.application.dto import (
     AmbiguousReasonDTO,
+    CommitInfoDTO,
+    PushRuleResultDTO,
     SdwanAddrObjectDTO,
     SdwanRuleDTO,
 )
 from app.modules.execute.domain.entities import ExecutePlanRule
 from app.modules.execute.domain.enums import SdwanRuleAction
+from app.modules.execute.domain.exceptions import ExecuteModuleNotFoundError
 from app.modules.execute.domain.value_objects import (
     PlannedRuleDraft,
     SdwanPolicyCatalog,
     SdwanRule,
 )
-from app.modules.execute.ports.gateways import ExecuteSDWANGatewayPort
+from app.modules.execute.ports.gateways import (
+    ExecuteSDWANGatewayPort,
+    ExecuteSDWANGatewayProviderPort,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class ExecuteSDWANGateway(ExecuteSDWANGatewayPort):
@@ -40,6 +62,10 @@ class ExecuteSDWANGateway(ExecuteSDWANGatewayPort):
 
     async def health_check(self) -> None:
         await self.sdwan_http_client.health_check()
+
+    async def get_sdwan_full_catalog(self) -> SdwanFullCatalog:
+        """Load the full catalog used for execution consistency checks."""
+        return await self.catalog_gateway.get_sdwan_full_catalog()
 
     async def get_sdwan_policy_catalog(
         self,
@@ -98,33 +124,66 @@ class ExecuteSDWANGateway(ExecuteSDWANGatewayPort):
         self,
         sdwan_target_id: str,
         plan_rules: list[ExecutePlanRule],
-    ) -> list[int]:
-        """Create SD-WAN policies from prepared execute plan rules."""
-        pushed_rules_ids: list[int] = []
-        for rule_num, plan_rule in enumerate(plan_rules, start=1):
+        priority: SdwanRulePriority,
+    ) -> list[PushRuleResultDTO]:
+        """Create SD-WAN policies and return an outcome for every plan rule."""
+        # -- get target device object info
+        target: SdwanDeviceObject | None = (  # fmt: no
+            await self.catalog_gateway.get_sdwan_device_object(
+                dev_obj_id=sdwan_target_id
+            )
+        )
+        if not target:
+            raise ExecuteModuleNotFoundError(
+                f"Not found device object {sdwan_target_id}"
+            )
+
+        # -- push rules for device object
+        push_results: list[PushRuleResultDTO] = []
+        for plan_rule in plan_rules:
             draft: PlannedRuleDraft = plan_rule.draft
 
-            pushed_rule_id: int = await self.sdwan_http_client.create_policy(
-                CreatePolicyRequest(
-                    name=f"imported-migrator-rule-{datetime.now()}-{rule_num}",
-                    description="",
-                    tags=[],
-                    activated=True,
-                    action=RuleAction(draft.action),
-                    log=False,
-                    l4_inspection=False,
-                    ingress_zone=draft.src_zones,
-                    egress_zone=draft.dst_zones,
-                    src_address=draft.src_addr_objects,
-                    dst_address=draft.dst_addr_objects,
-                    service=draft.services,
-                    parent=sdwan_target_id,
-                    parent_type="device",
+            try:
+                pushed_rule_id: int = await self.sdwan_http_client.create_policy(
+                    CreatePolicyRequest(
+                        name=draft.name,
+                        description="",
+                        tags=[],
+                        activated=True,
+                        action=RuleAction(draft.action),
+                        log=False,
+                        l4_inspection=False,
+                        ingress_zone=draft.src_zones,
+                        egress_zone=draft.dst_zones,
+                        src_address=draft.src_addr_objects,
+                        dst_address=draft.dst_addr_objects,
+                        service=draft.services,
+                        parent=sdwan_target_id,
+                        parent_type=DeviceObjectType(target.type),
+                        priority=PolicyPlacementPriority(priority),
+                    )
+                )
+            except Exception as error:
+                push_results.append(
+                    PushRuleResultDTO(
+                        execute_plan_rule_id=plan_rule.id,
+                        rule_name=draft.name,
+                        sdwan_rule_id=None,
+                        error=str(error) or type(error).__name__,
+                    )
+                )
+                continue
+
+            push_results.append(
+                PushRuleResultDTO(
+                    execute_plan_rule_id=plan_rule.id,
+                    rule_name=draft.name,
+                    sdwan_rule_id=pushed_rule_id,
+                    error=None,
                 )
             )
-            pushed_rules_ids.append(pushed_rule_id)
 
-        return pushed_rules_ids
+        return push_results
 
     async def get_rules(self, rules_ids: list[int]) -> list[SdwanRuleDTO]:
         """Return SD-WAN policy DTOs by external policy ids."""
@@ -181,3 +240,40 @@ class ExecuteSDWANGateway(ExecuteSDWANGatewayPort):
             src_idents=rule.src_idents,
             dst_idents=rule.dst_idents,
         )
+
+    async def commit_csp_changes(self) -> CommitInfoDTO:
+        """Commit changes on CSP and return commit info"""
+        commit_id: int = await self.sdwan_http_client.commit_full_state(
+            commit_name=(
+                f"policy-migrator-commit-{get_utc_now().strftime('%Y%m%d-%H%M%S')}"
+            ),
+            commit_description="",
+        )
+        commit_info_resp: CommitDataResponse = (
+            await self.sdwan_http_client.get_commit_info(commit_id=commit_id)
+        )
+        return CommitInfoDTO(
+            commit_id=commit_info_resp.commit_id,
+            name=commit_info_resp.name,
+            description=commit_info_resp.description,
+        )
+
+
+class ExecuteSDWANGatewayProvider(ExecuteSDWANGatewayProviderPort):
+    def __init__(self, client_provider: SDWANClientProvider) -> None:
+        self._client_provider = client_provider
+
+    @asynccontextmanager
+    async def acquire(
+        self,
+        profile_id: UUID,
+        vpc_id: str,
+    ) -> AsyncIterator[ExecuteSDWANGateway]:
+        async with self._client_provider.acquire(
+            profile_id,
+            vpc_id,
+        ) as client:
+            yield ExecuteSDWANGateway(
+                sdwan_http_client=client,
+                catalog_gateway=SDWANCatalogGateway(client),
+            )

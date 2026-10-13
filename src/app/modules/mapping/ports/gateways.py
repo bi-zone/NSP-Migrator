@@ -1,4 +1,6 @@
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol
+from uuid import UUID
 
 from app.integrations.sdwan_csp_api.gateways.models import (
     SdwanAddrObject,
@@ -8,6 +10,7 @@ from app.integrations.sdwan_csp_api.gateways.models import (
     SdwanService,
     SdwanZone,
 )
+from app.integrations.sdwan_csp_api.schemas import AllowedVPCResponse
 from app.modules.mapping.domain.value_objects import (
     CreateAddrObjectPayload,
     CreateServicePayload,
@@ -47,4 +50,14 @@ class MappingSDWANGatewayPort(Protocol):
 
     async def get_device_objects(self) -> list[SdwanDeviceObject]: ...
 
-    async def get_device_object(self, dev_obj_id: str) -> SdwanDeviceObject: ...
+    async def get_device_object(self, dev_obj_id: str) -> SdwanDeviceObject | None: ...
+
+
+class MappingSDWANGatewayProviderPort(Protocol):
+    async def discover_vpcs(self, profile_id: UUID) -> list[AllowedVPCResponse]: ...
+
+    def acquire(
+        self,
+        profile_id: UUID,
+        vpc_id: str,
+    ) -> AbstractAsyncContextManager[MappingSDWANGatewayPort]: ...

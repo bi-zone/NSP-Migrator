@@ -5,6 +5,9 @@ from uuid import UUID
 
 import streamlit as st
 
+from app.modules.canonical.application.use_cases.get_canonical_object import (
+    GetCanonicalObjectQuery,
+)
 from app.modules.mapping.application.dto import MappingEntityResultDetailsDTO
 from app.modules.mapping.application.get_mapping_entity_result_details import (
     GetMappingEntityResultDetailsQuery,
@@ -14,31 +17,47 @@ from app.modules.mapping.application.get_mapping_scope_rules_projection import (
     GetMappingScopeRulesProjectionResult,
 )
 from app.modules.mapping.application.get_sdwan_addr_objects import (
+    GetSdwanAddrObjectsQuery,
     GetSdwanAddrObjectsResult,
 )
 from app.modules.mapping.application.get_sdwan_services import (
+    GetSdwanServicesQuery,
     GetSdwanServicesResult,
 )
-from app.modules.mapping.application.get_sdwan_zones import GetSdwanZonesResult
+from app.modules.mapping.application.get_sdwan_zones import (
+    GetSdwanZonesQuery,
+)
 from app.modules.mapping.domain.enums import MappingEntityType
+from app.modules.trace.application.dto import (
+    GetTraceForEntityQuery,
+    TraceRecordDTO,
+)
+from app.modules.trace.domain.enums import TraceCanonicalKind
+from streamlit_app.components.mapped_rules.canonical_evidence import (
+    CanonicalObjectEvidence,
+)
 from streamlit_app.components.mapped_rules.utils import (
     MappedRulesProjectionState,
 )
 from streamlit_app.services.sdwan import SdwanEntity, sdwan_item_str_value
 from streamlit_app.services.use_cases import (
+    get_canonical_object,
     get_mapping_entity_result_details,
     get_mapping_scope_rules_projection,
     get_sdwan_addr_objects,
     get_sdwan_services,
     get_sdwan_zones,
+    get_trace_for_entity,
     run_async,
 )
+from streamlit_app.session.context import get_context
 
 T = TypeVar("T")
 
 _PROJECTION_CACHE_KEY = "mapped_rules_projection_cache"
 _MAPPING_RESULT_DETAILS_CACHE_KEY = "mapped_rules_mapping_result_details_cache"
 _SDWAN_CATALOG_ROWS_CACHE_KEY = "mapped_rules_sdwan_catalog_rows_cache"
+_CANONICAL_OBJECT_EVIDENCE_CACHE_KEY = "mapped_rules_canonical_object_evidence_cache"
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +77,7 @@ def load_cached_projection_state(mapping_scope_id: UUID) -> MappedRulesProjectio
 
 
 def load_cached_mapping_result_details(
+    mapping_scope_id: UUID,
     mapping_result_id: UUID,
 ) -> MappingEntityResultDetailsDTO:
     """
@@ -68,18 +88,46 @@ def load_cached_mapping_result_details(
     """
     return _get_or_load(
         cache_name=_MAPPING_RESULT_DETAILS_CACHE_KEY,
-        item_key=mapping_result_id,
-        load_func=lambda: _load_mapping_result_details_uncached(mapping_result_id),
+        item_key=_mapping_result_details_cache_key(
+            mapping_scope_id=mapping_scope_id,
+            mapping_result_id=mapping_result_id,
+        ),
+        load_func=lambda: _load_mapping_result_details_uncached(
+            mapping_scope_id=mapping_scope_id,
+            mapping_result_id=mapping_result_id,
+        ),
+    )
+
+
+def load_cached_canonical_object_evidence(
+    canonical_snapshot_id: UUID,
+    canonical_entity_id: UUID,
+) -> CanonicalObjectEvidence:
+    """Load immutable canonical fields and source trace once per object."""
+    return _get_or_load(
+        cache_name=_CANONICAL_OBJECT_EVIDENCE_CACHE_KEY,
+        item_key=_canonical_object_evidence_cache_key(
+            canonical_snapshot_id=canonical_snapshot_id,
+            canonical_entity_id=canonical_entity_id,
+        ),
+        load_func=lambda: _load_canonical_object_evidence_uncached(
+            canonical_snapshot_id=canonical_snapshot_id,
+            canonical_entity_id=canonical_entity_id,
+        ),
     )
 
 
 def load_cached_sdwan_catalog_rows(
+    mapping_scope_id: UUID,
     entity_type: MappingEntityType,
 ) -> list[SdwanCatalogTableRow]:
-    """Cache SD-WAN catalog rows in Streamlit session state."""
+    """Cache SD-WAN catalog rows in Streamlit session state.
+    Cache Key contains mapping scope to isolate caches
+    of different CSP Profiles (different objects catalogs)
+    """
     return _get_or_load(
         cache_name=_SDWAN_CATALOG_ROWS_CACHE_KEY,
-        item_key=entity_type,
+        item_key=f"{mapping_scope_id}_{entity_type}",
         load_func=lambda: _load_sdwan_catalog_rows_uncached(entity_type),
     )
 
@@ -89,9 +137,19 @@ def invalidate_projection_cache(mapping_scope_id: UUID | None = None) -> None:
 
 
 def invalidate_mapping_result_details_cache(
+    mapping_scope_id: UUID | None = None,
     mapping_result_id: UUID | None = None,
 ) -> None:
-    _invalidate_cache_item(_MAPPING_RESULT_DETAILS_CACHE_KEY, mapping_result_id)
+    if mapping_scope_id is None or mapping_result_id is None:
+        _invalidate_cache_item(_MAPPING_RESULT_DETAILS_CACHE_KEY, None)
+        return
+    _invalidate_cache_item(
+        _MAPPING_RESULT_DETAILS_CACHE_KEY,
+        _mapping_result_details_cache_key(
+            mapping_scope_id=mapping_scope_id,
+            mapping_result_id=mapping_result_id,
+        ),
+    )
 
 
 def invalidate_sdwan_catalog_rows_cache(
@@ -108,7 +166,10 @@ def invalidate_after_mapping_result_mutation(
     Candidate/direct assignment changes mapping data, but not the SD-WAN catalog.
     """
     invalidate_projection_cache(mapping_scope_id)
-    invalidate_mapping_result_details_cache(mapping_result_id)
+    invalidate_mapping_result_details_cache(
+        mapping_scope_id=mapping_scope_id,
+        mapping_result_id=mapping_result_id,
+    )
 
 
 def invalidate_after_scope_mapping_mutation(mapping_scope_id: UUID) -> None:
@@ -179,20 +240,75 @@ def _load_projection_state_uncached(
     )
 
 
+def _mapping_result_details_cache_key(
+    *,
+    mapping_scope_id: UUID,
+    mapping_result_id: UUID,
+) -> str:
+    return f"{mapping_scope_id}:{mapping_result_id}"
+
+
+def _canonical_object_evidence_cache_key(
+    *,
+    canonical_snapshot_id: UUID,
+    canonical_entity_id: UUID,
+) -> str:
+    return f"{canonical_snapshot_id}:{canonical_entity_id}"
+
+
 def _load_mapping_result_details_uncached(
+    mapping_scope_id: UUID,
     mapping_result_id: UUID,
 ) -> MappingEntityResultDetailsDTO:
     result = run_async(
         get_mapping_entity_result_details().execute(
-            GetMappingEntityResultDetailsQuery(mapping_result_id=mapping_result_id)
+            GetMappingEntityResultDetailsQuery(
+                mapping_scope_id=mapping_scope_id,
+                mapping_result_id=mapping_result_id,
+            )
         )
     )
     return result.details
 
 
+def _load_canonical_object_evidence_uncached(
+    *,
+    canonical_snapshot_id: UUID,
+    canonical_entity_id: UUID,
+) -> CanonicalObjectEvidence:
+    canonical_result = run_async(
+        get_canonical_object().execute(
+            GetCanonicalObjectQuery(
+                canonical_snapshot_id=canonical_snapshot_id,
+                object_id=canonical_entity_id,
+                include_members=False,
+            )
+        )
+    )
+    trace_records: list[TraceRecordDTO] = run_async(
+        get_trace_for_entity().execute(
+            GetTraceForEntityQuery(
+                canonical_kind=TraceCanonicalKind.OBJECT,
+                canonical_id=canonical_entity_id,
+            )
+        )
+    )
+    return CanonicalObjectEvidence(
+        canonical_object=canonical_result.object,
+        trace_records=[
+            record
+            for record in trace_records
+            if record.canonical_snapshot_id == canonical_snapshot_id
+        ],
+    )
+
+
 def _load_sdwan_catalog_rows_uncached(
     entity_type: MappingEntityType,
 ) -> list[SdwanCatalogTableRow]:
+    mapping_scope_id = get_context().mapping_scope_id
+    if mapping_scope_id is None:
+        raise ValueError("Mapping scope is required")
 
     def _sdwan_catalog_row(
         item: SdwanEntity,
@@ -204,18 +320,20 @@ def _load_sdwan_catalog_rows_uncached(
         )
 
     if entity_type == MappingEntityType.ZONE:
-        zones_result: GetSdwanZonesResult = run_async(get_sdwan_zones().execute())
+        zones_result = run_async(
+            get_sdwan_zones().execute(GetSdwanZonesQuery(mapping_scope_id))
+        )
         return [_sdwan_catalog_row(item) for item in zones_result.zones]
 
     if entity_type == MappingEntityType.ADDR:
         addr_objs_result: GetSdwanAddrObjectsResult = run_async(
-            get_sdwan_addr_objects().execute()
+            get_sdwan_addr_objects().execute(GetSdwanAddrObjectsQuery(mapping_scope_id))
         )
         return [_sdwan_catalog_row(item) for item in addr_objs_result.addr_objects]
 
     if entity_type == MappingEntityType.SERVICE:
         services_result: GetSdwanServicesResult = run_async(
-            get_sdwan_services().execute()
+            get_sdwan_services().execute(GetSdwanServicesQuery(mapping_scope_id))
         )
         return [_sdwan_catalog_row(item) for item in services_result.services]
 

@@ -5,16 +5,36 @@ from typing import Annotated, Any, Literal
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
+# -- Common
+class PaginationMeta(BaseModel):
+    total: int
+    prev_page: str | None
+    next_page: str | None
+
+
 # -- Login schemas
 class LoginRequest(BaseModel):
     user: str
     password: str
+    vpc_id: str | None
+
+
+class AllowedVPCResponse(BaseModel):
     vpc_id: str
+    customer_name: str
+    project_name: str
+    cuid: str
+    pid: str
+
+    model_config = ConfigDict(extra="ignore")
 
 
 class LoginResponse(BaseModel):
     token: str
-    vpc_id: str
+    vpc_id: str | None = None
+    allowed_vpcs: list[AllowedVPCResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(extra="ignore")
 
 
 # --
@@ -44,7 +64,6 @@ class CommitDataResponse(BaseModel):
     name: str
     description: str
     created_at: datetime
-    updated_at: datetime | None = None
     user_id: str
     is_applied: bool
     applied_by_task_id: Any
@@ -79,7 +98,7 @@ class CommitRuleObjectsRequest(BaseModel):
     name: str
     description: str = ""
     force: bool = True
-    filter: str
+    filter: str | None = None
 
 
 # -- Zones schemas
@@ -96,6 +115,8 @@ class ZoneResponse(BaseModel):
 
 class ZonesResponse(BaseModel):
     result: list[ZoneResponse]
+    page: int
+    total: int
 
 
 # -- Service schemas
@@ -186,11 +207,11 @@ class ServiceResponse(BaseModel):
 
 class ServicesResponse(BaseModel):
     data: list[ServiceResponse]
+    meta: PaginationMeta
 
 
 # -- Address objects schemas
 class AddrObjectType(StrEnum):
-
     PREFIX = "prefix"
     HOST = "host"
     FQDN = "fqdn"
@@ -264,6 +285,7 @@ class AddrObjectResponse(BaseModel):
 
 class AddrObjectsResponse(BaseModel):
     data: list[AddrObjectResponse]
+    meta: PaginationMeta
 
 
 # -- Networks schemas
@@ -305,7 +327,7 @@ class NetworkResponse(BaseModel):
     public_endpoint: str | None = None
     role: str
     cont_id: str | None = None
-    br: str
+    br: str | None = None
     dp_port_id: str | None = None
     ns: str | None = None
 
@@ -334,6 +356,8 @@ class NetworkResponse(BaseModel):
 
 class NetworksResponse(BaseModel):
     result: list[NetworkResponse]
+    page: int
+    total: int
 
 
 # -- Address object create schemas
@@ -381,7 +405,6 @@ class CreateAddrObjectRequest(BaseModel):
 
 # -- Service create schema
 class ServiceCreateRequest(BaseModel):
-
     model_config = ConfigDict(
         extra="ignore",
     )
@@ -414,7 +437,6 @@ class ServiceCreateRequest(BaseModel):
 
 # -- CPE info schemas
 class CPEInfoResponse(BaseModel):
-
     model_config = ConfigDict(
         extra="ignore",
     )
@@ -436,7 +458,6 @@ DeviceObjectId = str
 
 
 class CConfInfoResponse(BaseModel):
-
     model_config = ConfigDict(
         extra="ignore",
     )
@@ -451,8 +472,12 @@ class CConfInfoResponse(BaseModel):
     deleted: bool
 
 
-class DeviceObjectResponse(BaseModel):
+class DeviceObjectType(StrEnum):
+    DEVICE = "device"
+    GROUP = "group"
 
+
+class DeviceObjectResponse(BaseModel):
     model_config = ConfigDict(
         extra="ignore",
     )
@@ -461,7 +486,7 @@ class DeviceObjectResponse(BaseModel):
     dev_obj_id: DeviceObjectId
     parent_dev_obj_ids: list[DeviceObjectId]
     vpc_id: str
-    type: Literal["group", "device"]
+    type: DeviceObjectType
     name: str
     description: str | None
     depth: int
@@ -525,6 +550,17 @@ class PolicyResponse(BaseModel):
     dst_idents: list[Any]
 
 
+class PoliciesResponse(BaseModel):
+    data: list[PolicyResponse]
+    meta: PaginationMeta
+
+
+class PolicyPlacementPriority(StrEnum):
+    LOCAL = "local"  # for Device (CPE)
+    PRE = "pre"  # for Group
+    POST = "post"  # for Group
+
+
 class CreatePolicyRequest(BaseModel):
     name: str
     description: str = ""
@@ -539,9 +575,31 @@ class CreatePolicyRequest(BaseModel):
     dst_address: list[int]
     service: list[int]
     parent: DeviceObjectId
-    parent_type: Literal["device"]
-    priority: str = "local"
+    parent_type: DeviceObjectType
+    priority: PolicyPlacementPriority
     policy_position: dict = {"position": "tail"}
+
+    @model_validator(mode="after")
+    def validate_priority(self):
+        # For DEVICE only LOCAL
+        if (
+            self.parent_type == DeviceObjectType.DEVICE
+            and self.priority != PolicyPlacementPriority.LOCAL
+        ):
+            raise ValueError(
+                "Policies for DEVICE can be placed only in LOCAL placements"
+            )
+
+        # For GROUP only PRE, POST
+        if self.parent_type == DeviceObjectType.GROUP and self.priority not in (
+            PolicyPlacementPriority.PRE,
+            PolicyPlacementPriority.POST,
+        ):
+            raise ValueError(
+                "Policies for GROUP can be placed only in PRE, POST placements"
+            )
+
+        return self
 
 
 # --

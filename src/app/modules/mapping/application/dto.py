@@ -14,7 +14,6 @@ from app.modules.mapping.ports.canonical_reader.schemas import CanonicalRuleActi
 
 @dataclass(frozen=True, slots=True)
 class MappingResultsSummary:
-
     total_entities: int
     matched_entities: int
     ambiguous: int
@@ -71,6 +70,7 @@ class CanonicalRuleDisplayDTO:
     canonical_rule_id: UUID
     name: str
     action: CanonicalRuleAction
+    priority: int
 
     src_zones: list[CanonicalEntityDisplayDTO]
     dst_zones: list[CanonicalEntityDisplayDTO]
@@ -89,6 +89,7 @@ class MappingScopeRuleDisplayDTO:
     canonical_rule_id: UUID
     name: str
     action: MappingScopeRuleAction
+    priority: int
     status: MappedRuleStatus
 
     src_zones: list[MappedSdwanEntityDisplayDTO]

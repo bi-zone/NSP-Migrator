@@ -9,12 +9,11 @@ import streamlit as st
 from app.core.hashers import json_hash
 from app.integrations.sdwan_csp_api.gateways.models import (
     SdwanAddrObject,
-    SdwanDeviceObject,
     SdwanNetwork,
     SdwanService,
     SdwanZone,
 )
-from app.modules.execute.application.dto import SdwanRuleDTO
+from app.modules.execute.application.dto import PushRuleResultDTO, SdwanRuleDTO
 from app.modules.execute.application.use_cases.get_execute_plan_rules import (
     GetExecutePlanRulesQuery,
     GetExecutePlanRulesResult,
@@ -35,11 +34,15 @@ from app.modules.execute.domain.entities import ExecutePlanRule
 from app.modules.execute.domain.enums import RuleMatchStatus
 from app.modules.execute.domain.value_objects import PlannedRuleDraft
 from app.modules.mapping.application.get_sdwan_addr_objects import (
+    GetSdwanAddrObjectsQuery,
     GetSdwanAddrObjectsResult,
 )
+from app.modules.mapping.application.get_sdwan_services import GetSdwanServicesQuery
+from app.modules.mapping.application.get_sdwan_zones import GetSdwanZonesQuery
+from streamlit_app.components.execute.coverage_details import render_coverage_details
 from streamlit_app.components.mapped_rules.utils import (
-    STATUS_CELL_STYLE,
     StatusStyleColor,
+    status_cell_style,
 )
 from streamlit_app.services.sdwan import sdwan_item_str_value
 from streamlit_app.services.use_cases import (
@@ -49,7 +52,6 @@ from streamlit_app.services.use_cases import (
     get_sdwan_addr_objects,
     get_sdwan_rules,
     get_sdwan_services,
-    get_sdwan_targets,
     get_sdwan_zones,
     run_async,
 )
@@ -62,24 +64,22 @@ PUSH_RULES_RESULT_KEY = "push_rules_result_key"
 
 @dataclass(frozen=True, slots=True)
 class SdwanObjectsState:
-
     sdwan_zones: list[SdwanZone]
     sdwan_services: list[SdwanService]
     sdwan_addr_objects: list[SdwanAddrObject]
     sdwan_networks: list[SdwanNetwork]
-    sdwan_dev_objects: list[SdwanDeviceObject]
 
     sdwan_zone_by_id: dict[str, SdwanZone]
     sdwan_service_by_id: dict[str, SdwanService]
     sdwan_addr_object_by_id: dict[str, SdwanAddrObject]
     sdwan_network_by_network_id: dict[str, SdwanNetwork]
-    sdwan_dev_objects_by_dev_obj_id: dict[str, SdwanDeviceObject]
 
 
 @dataclass(frozen=True, slots=True)
 class SdwanRuleTableRow:
-
     rule_id: str
+    canonical_priority: int | None
+    name: str
     action: str
     ingress_zone: str
     egress_zone: str
@@ -94,6 +94,12 @@ class PlanRuleMatchInfoRow:
     mapping_scope_rule_id: str
     matched_sdwan_rule_id: str
     match_info: str
+
+
+@dataclass(frozen=True, slots=True)
+class FailedPushRuleRow:
+    name: str
+    error: str
 
 
 def render() -> None:
@@ -159,8 +165,9 @@ def render() -> None:
         else:
             return
 
-    _render_prepare_execute_result(prepare_plan_result)  # type: ignore
-    _render_push_rules_panel(prepare_plan_result)  # type: ignore
+    assert prepare_plan_result is not None
+    _render_prepare_execute_result(prepare_plan_result)
+    _render_push_rules_panel(prepare_plan_result)
 
     with st.expander("Session context"):
         st.json(context_as_dict())
@@ -175,6 +182,9 @@ def render() -> None:
 def _load_sdwan_objects_state() -> SdwanObjectsState:
 
     context = get_context()
+    mapping_scope_id = context.mapping_scope_id
+    if mapping_scope_id is None:
+        raise ValueError("Mapping scope is required")
 
     _sdwan_objects_state_key = (
         f"_sdwan_objects_state_key_{context.mapping_scope_id}_{context.execute_plan_id}"
@@ -182,27 +192,28 @@ def _load_sdwan_objects_state() -> SdwanObjectsState:
 
     if _sdwan_objects_state_key not in st.session_state:
         sdwan_zones: list[SdwanZone] = list(
-            run_async(get_sdwan_zones().execute()).zones or []
+            run_async(
+                get_sdwan_zones().execute(GetSdwanZonesQuery(mapping_scope_id))
+            ).zones
+            or []
         )
         sdwan_services: list[SdwanService] = list(
-            run_async(get_sdwan_services().execute()).services or []
+            run_async(
+                get_sdwan_services().execute(GetSdwanServicesQuery(mapping_scope_id))
+            ).services
+            or []
         )
         addr_objects_result: GetSdwanAddrObjectsResult = run_async(
-            get_sdwan_addr_objects().execute()
+            get_sdwan_addr_objects().execute(GetSdwanAddrObjectsQuery(mapping_scope_id))
         )
         sdwan_addr_objects: list[SdwanAddrObject] = addr_objects_result.addr_objects
         sdwan_networks: list[SdwanNetwork] = addr_objects_result.networks
-
-        sdwan_dev_objects: list[SdwanDeviceObject] = list(
-            run_async(get_sdwan_targets().execute()).targets or []
-        )
 
         _objects_state = SdwanObjectsState(
             sdwan_zones=sdwan_zones,
             sdwan_services=sdwan_services,
             sdwan_addr_objects=sdwan_addr_objects,
             sdwan_networks=sdwan_networks,
-            sdwan_dev_objects=sdwan_dev_objects,
             sdwan_zone_by_id=normalize_key_map(build_map_by_field(sdwan_zones, "id")),
             sdwan_service_by_id=normalize_key_map(
                 build_map_by_field(sdwan_services, "id")
@@ -212,9 +223,6 @@ def _load_sdwan_objects_state() -> SdwanObjectsState:
             ),
             sdwan_network_by_network_id=normalize_key_map(
                 build_map_by_field(sdwan_networks, "network_id")
-            ),
-            sdwan_dev_objects_by_dev_obj_id=normalize_key_map(
-                build_map_by_field(sdwan_dev_objects, "dev_obj_id")
             ),
         )
 
@@ -246,16 +254,16 @@ def _render_prepare_execute_result(
 
     def highlight(row: pd.Series):
         if row["metric"] == _PrepMetricsEnum.VALID and row["value"] > 0:
-            return ["", STATUS_CELL_STYLE[StatusStyleColor.GREEN]]
+            return ["", status_cell_style(StatusStyleColor.GREEN)]
 
         elif (
             row["metric"] in (_PrepMetricsEnum.MATCHED, _PrepMetricsEnum.COVERED)
             and row["value"] > 0
         ):
-            return ["", STATUS_CELL_STYLE[StatusStyleColor.YELLOW]]
+            return ["", status_cell_style(StatusStyleColor.YELLOW)]
 
         elif row["metric"] == _PrepMetricsEnum.ERROR and row["value"] > 0:
-            return ["", STATUS_CELL_STYLE[StatusStyleColor.RED]]
+            return ["", status_cell_style(StatusStyleColor.RED)]
 
         return ["", ""]
 
@@ -270,6 +278,32 @@ def _render_prepare_execute_result(
             "value": st.column_config.NumberColumn("Value", width="medium"),
         },
     )
+
+    if preparing_result.excluded_existing_rules:
+        excluded_rules = preparing_result.excluded_existing_rules
+        st.warning(
+            f"{len(excluded_rules)} existing SD-WAN policies were excluded from "
+            "comparison. Match and coverage results may be incomplete."
+        )
+        with st.expander(f"Excluded SD-WAN policies [{len(excluded_rules)}]"):
+            st.dataframe(
+                [
+                    {
+                        "policy_id": f"#{rule.sdwan_rule_id}",
+                        "reason": rule.reason,
+                    }
+                    for rule in excluded_rules
+                ],
+                column_config={
+                    "policy_id": st.column_config.TextColumn(
+                        "SD-WAN policy ID",
+                        width="medium",
+                    ),
+                    "reason": st.column_config.TextColumn("Reason", width="large"),
+                },
+                hide_index=True,
+                width="stretch",
+            )
 
     # Execute plan rules tables by match status
     _render_analyzed_execute_plan_rules_tables(preparing_result.id)
@@ -316,14 +350,55 @@ def _render_push_rules_panel(preparing_result: PrepareExecutePlanResult) -> None
 
     st.space("medium")
     st.markdown("#### Push rules to SD-WAN result")
-    _render_sdwan_rules_table(rules=push_result.rules)
+    if push_result.rules:
+        st.success(
+            f"Created {len(push_result.rules)} policies on SD-WAN "
+            f"(Commit #{push_result.commit_info.commit_id})"
+        )
+        _render_sdwan_rules_table(rules=push_result.rules)
+
+    failed_rows = _build_failed_push_rule_rows(push_result.push_results)
+    if failed_rows:
+        st.error(f"Failed to create {len(failed_rows)} policies")
+        st.dataframe(
+            [asdict(row) for row in failed_rows],
+            column_config={
+                "name": st.column_config.TextColumn("Policy", width="medium"),
+                "error": st.column_config.TextColumn("Error", width="large"),
+            },
+            hide_index=True,
+            width="stretch",
+        )
+        st.info(
+            "To retry failed policies, prepare a new execute plan. "
+            "Policies already created on SD-WAN will be matched and not pushed again."
+        )
 
 
-def _render_sdwan_rules_table_from_rows(rows: list[SdwanRuleTableRow]) -> None:
-    st.dataframe(
+def _build_failed_push_rule_rows(
+    push_results: list[PushRuleResultDTO],
+) -> list[FailedPushRuleRow]:
+    return [
+        FailedPushRuleRow(name=result.rule_name, error=result.error or "Push failed")
+        for result in push_results
+        if result.error is not None
+    ]
+
+
+def _render_sdwan_rules_table_from_rows(
+    rows: list[SdwanRuleTableRow],
+    *,
+    single_row_selection_key: str | None = None,
+) -> int | None:
+    dataframe_events = st.dataframe(
         [asdict(r) for r in rows],
         column_config={
             "rule_id": st.column_config.TextColumn("ID", width="small"),
+            "canonical_priority": st.column_config.NumberColumn(
+                "Priority",
+                width="small",
+            ),
+            "name": st.column_config.TextColumn("Name", width="medium"),
             "action": st.column_config.TextColumn("Action", width="small"),
             "ingress_zone": st.column_config.TextColumn(
                 "Ingress Zones", width="medium"
@@ -333,7 +408,15 @@ def _render_sdwan_rules_table_from_rows(rows: list[SdwanRuleTableRow]) -> None:
             "dst_address": st.column_config.TextColumn("Dst Addresses", width="medium"),
             "service": st.column_config.TextColumn("Service", width="medium"),
         },
+        on_select="rerun" if single_row_selection_key else "ignore",
+        selection_mode="single-row" if single_row_selection_key else None,
+        key=single_row_selection_key,
     )
+    if single_row_selection_key is None:
+        return None
+
+    selected_rows = dataframe_events.selection.rows
+    return selected_rows[0] if selected_rows else None
 
 
 def _render_sdwan_rules_table(rules: list[SdwanRuleDTO]) -> None:
@@ -347,7 +430,6 @@ def _build_sdwan_rules_rows(rules: list[SdwanRuleDTO]) -> list[SdwanRuleTableRow
     rows: list[SdwanRuleTableRow] = []
 
     for rule in rules:
-
         _ingress_zones_names: list[str] = [
             sdwan_item_str_value(sdwan_objects_state.sdwan_zone_by_id[str(z_id)])
             for z_id in rule.ingress_zone
@@ -376,6 +458,8 @@ def _build_sdwan_rules_rows(rules: list[SdwanRuleDTO]) -> list[SdwanRuleTableRow
         rows.append(
             SdwanRuleTableRow(
                 rule_id=str(rule.policy_id),
+                canonical_priority=None,
+                name=rule.name,
                 action=rule.action,
                 ingress_zone=", ".join(_ingress_zones_names),
                 egress_zone=", ".join(_egress_zones_names),
@@ -426,6 +510,8 @@ def _build_sdwan_rules_rows_from_execute_plan_rules(
         rows.append(
             SdwanRuleTableRow(
                 rule_id="#",
+                canonical_priority=plan_rule.priority,
+                name=draft.name,
                 action=draft.action,
                 ingress_zone=", ".join(_ingress_zones_names),
                 egress_zone=", ".join(_egress_zones_names),
@@ -440,16 +526,23 @@ def _build_sdwan_rules_rows_from_execute_plan_rules(
 
 def _render_sdwan_rule_rows_from_execute_plan_rules(
     plan_rules: list[ExecutePlanRule],
-) -> None:
+    *,
+    single_row_selection_key: str | None = None,
+) -> int | None:
     rows: list[SdwanRuleTableRow] = _build_sdwan_rules_rows_from_execute_plan_rules(
         plan_rules
     )
-    _render_sdwan_rules_table_from_rows(rows)
+    return _render_sdwan_rules_table_from_rows(
+        rows,
+        single_row_selection_key=single_row_selection_key,
+    )
 
 
 def _render_matched_rules_paired_tables(
     plan_rules: list[ExecutePlanRule],
-) -> None:
+    *,
+    planned_rules_selection_key: str | None = None,
+) -> ExecutePlanRule | None:
 
     # prepare objects lists
     sdwan_rules_cache_hash_key: str = (
@@ -457,13 +550,21 @@ def _render_matched_rules_paired_tables(
     )
 
     if sdwan_rules_cache_hash_key not in st.session_state:
+        mapping_scope_id = get_context().mapping_scope_id
+        if mapping_scope_id is None:
+            raise ValueError("Mapping scope is required")
         sdwan_rules_ids: list[int] = []
         for rule in plan_rules:
             if rule.matched_sdwan_rule_id is not None:
                 sdwan_rules_ids.append(rule.matched_sdwan_rule_id)
 
         sdwan_rules_res: GetSdwanRulesResult = run_async(
-            get_sdwan_rules().execute(query=GetSdwanRulesQuery(sdwan_rules_ids))
+            get_sdwan_rules().execute(
+                query=GetSdwanRulesQuery(
+                    mapping_scope_id=mapping_scope_id,
+                    rules_ids=sdwan_rules_ids,
+                )
+            )
         )
         sdwan_rules_by_id: dict[str, SdwanRuleDTO] = normalize_key_map(
             build_map_by_field(sdwan_rules_res.rules, "policy_id")
@@ -481,11 +582,31 @@ def _render_matched_rules_paired_tables(
 
     with left_col:
         st.markdown("##### Planned for apply rules")
-        _render_sdwan_rule_rows_from_execute_plan_rules(plan_rules)
+        selected_plan_rule_index = _render_sdwan_rule_rows_from_execute_plan_rules(
+            plan_rules,
+            single_row_selection_key=planned_rules_selection_key,
+        )
 
     with right_col:
         st.markdown("##### Rules on SD-WAN")
         _render_sdwan_rules_table(st.session_state[sdwan_rules_cache_hash_key])
+
+    if selected_plan_rule_index is None:
+        return None
+    return plan_rules[selected_plan_rule_index]
+
+
+def _render_covered_rules(plan_rules: list[ExecutePlanRule]) -> None:
+    selected_plan_rule = _render_matched_rules_paired_tables(
+        plan_rules,
+        planned_rules_selection_key=(
+            f"covered_planned_rule_{json_hash([str(rule.id) for rule in plan_rules])}"
+        ),
+    )
+    if selected_plan_rule is None:
+        st.caption("Select one planned policy in the left table to inspect coverage.")
+        return
+    render_coverage_details(selected_plan_rule)
 
 
 def _render_analyzed_execute_plan_rules_tables(
@@ -495,28 +616,28 @@ def _render_analyzed_execute_plan_rules_tables(
         title="Valid rules",
         execute_plan_id=execute_plan_id,
         match_status=RuleMatchStatus.NEW,
-        render_tables_func=_render_sdwan_rule_rows_from_execute_plan_rules,
+        render_tables_func=_render_sdwan_rule_rows_from_execute_plan_rules,  # type: ignore
     )
 
     _render_plan_rules_section(
         title="Matched exactly rules",
         execute_plan_id=execute_plan_id,
         match_status=RuleMatchStatus.EXACT_MATCH,
-        render_tables_func=_render_matched_rules_paired_tables,
+        render_tables_func=_render_matched_rules_paired_tables,  # type: ignore
     )
 
     _render_plan_rules_section(
         title="Covered rules",
         execute_plan_id=execute_plan_id,
         match_status=RuleMatchStatus.COVERED_MATCH,
-        render_tables_func=_render_matched_rules_paired_tables,
+        render_tables_func=_render_covered_rules,
     )
 
     _render_plan_rules_section(
         title="Error rules",
         execute_plan_id=execute_plan_id,
         match_status=RuleMatchStatus.MATCH_ERROR,
-        render_tables_func=_render_sdwan_rule_rows_from_execute_plan_rules,
+        render_tables_func=_render_sdwan_rule_rows_from_execute_plan_rules,  # type: ignore
     )
 
 

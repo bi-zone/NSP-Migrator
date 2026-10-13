@@ -39,7 +39,10 @@ def render_bulk_actions_toolbar(state: MappedRulesProjectionState) -> None:
         with tab_assign_zone:
             _render_assign_zone_tab(
                 mapping_scope_id=state.mapping_scope_id,
-                zones=load_cached_sdwan_catalog_rows(MappingEntityType.ZONE),
+                zones=load_cached_sdwan_catalog_rows(
+                    entity_type=MappingEntityType.ZONE,
+                    mapping_scope_id=state.mapping_scope_id,
+                ),
             )
 
         with tab_auto_create:
@@ -79,7 +82,7 @@ def _render_assign_zone_tab(
         if submitted:
             try:
                 with st.spinner("Assigning zones to policies of scope..."):
-                    run_async(
+                    assignment = run_async(
                         get_assign_zone_for_scope().execute(
                             AssignZoneForScopeCommand(
                                 zone_direction=direction,
@@ -93,6 +96,8 @@ def _render_assign_zone_tab(
                 )
                 st.session_state[_success_key] = (
                     "Zone assigned to rules in this mapping scope."
+                    if assignment.operands
+                    else "Zone is already assigned to rules in this mapping scope."
                 )
                 st.rerun()
             except Exception as error:

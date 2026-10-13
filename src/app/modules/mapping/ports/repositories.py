@@ -13,13 +13,17 @@ from app.modules.mapping.domain.enums import (
 )
 
 
-class MappingScopeRepositoryPort(ABC):
+class MappingRepositoryPort(ABC):
     """
-    Repository for MappingScope aggregate.
+    Repository for mapping runtime data.
 
     Owns:
     - mapping_scope;
     - mapping_scope_rule.
+    - mapping_entity_result;
+    - mapping_entity_candidate.
+
+    Runtime-cache implementation stores all objects as one mapping scope graph.
     """
 
     @abstractmethod
@@ -35,6 +39,16 @@ class MappingScopeRepositoryPort(ABC):
         with_rules: bool = False,
     ) -> MappingScope | None:
         """Return scope by id."""
+        ...
+
+    @abstractmethod
+    async def refresh_catalog_fingerprint(
+        self,
+        *,
+        scope_id: UUID,
+        catalog_fingerprint: str,
+    ) -> MappingScope:
+        """Save the catalog baseline after an intentional SD-WAN catalog write."""
         ...
 
     @abstractmethod
@@ -74,22 +88,15 @@ class MappingScopeRepositoryPort(ABC):
         offset: int = 0,
     ) -> list[MappingScope]:
         """Return recent mapping scopes for UI list."""
+        # TODO(querying): replace limit/offset with the shared Pagination object.
         ...
 
-
-class MappingEntityResultRepositoryPort(ABC):
-    """
-    Repository for MappingEntityResult aggregate.
-
-    Owns:
-    - mapping_entity_result;
-    - mapping_entity_candidate.
-
-    Candidate is a child entity.
-    """
-
     @abstractmethod
-    async def add_results(self, results: list[MappingEntityResult]) -> None:
+    async def add_results(
+        self,
+        scope_id: UUID,
+        results: list[MappingEntityResult],
+    ) -> None:
         """
         Insert mapping results without deleting existing rows.
 
@@ -98,8 +105,9 @@ class MappingEntityResultRepositoryPort(ABC):
         ...
 
     @abstractmethod
-    async def get_result_by_id(
+    async def get_result(
         self,
+        scope_id: UUID,
         result_id: UUID,
         *,
         with_candidates: bool = False,
@@ -108,7 +116,7 @@ class MappingEntityResultRepositoryPort(ABC):
         ...
 
     @abstractmethod
-    async def get_result_by_canonical_entity(
+    async def find_result_by_canonical_entity(
         self,
         *,
         scope_id: UUID,
@@ -128,7 +136,7 @@ class MappingEntityResultRepositoryPort(ABC):
         ...
 
     @abstractmethod
-    async def list_by_scope(
+    async def list_results(
         self,
         *,
         scope_id: UUID,

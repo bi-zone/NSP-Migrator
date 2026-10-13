@@ -10,7 +10,7 @@ from app.modules.canonical.domain import (
 )
 from app.modules.imports.cisco_asa.adapters.normalizer.rules_helpers import (
     append_service_operands_with_trace,
-    emit_rule_zone_issues,
+    emit_rule_usage_issues,
     emit_textual_duplicate_issue,
     validate_protocol_operand,
 )
@@ -179,7 +179,7 @@ class _RuleNormalizationMixin:
         state.objects_by_key.
 
         Per-rule loop order:
-        1. Emit issues (zone, duplicate, protocol validation)
+        1. Emit lineage and actionable issues (zone, usage, duplicate, protocol)
         2. Decide processing status via resolve_rule_processing
         3. Build metadata description for downstream auto-apply gating
         4. Create rule + zone/address/service operands with traces
@@ -194,7 +194,7 @@ class _RuleNormalizationMixin:
         key_builder = DeterministicRuleKeyBuilder()
         for rule in parsed.rules:
             # Issue emission and gating inputs happen before rule materialization.
-            emit_rule_zone_issues(rule, state)
+            emit_rule_usage_issues(rule, state)
             emit_textual_duplicate_issue(rule, state)
             protocol_blocker = validate_protocol_operand(rule, state)
             state.rule_protocol_blockers[rule.rule_name] = protocol_blocker

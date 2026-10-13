@@ -1,3 +1,24 @@
+# Cisco ASA test fixtures (raw → canonical)
+
+Minimal `.cfg` files for parser / normalizer / trace unit tests.
+Spec source: [docs/review_cisco_asa_forensic_cfg_fixtures_2026-05-19.md](../../../docs/review_cisco_asa_forensic_cfg_fixtures_2026-05-19.md).
+
+## Fixture adjustments vs review doc
+
+| TC | Change | Reason |
+|----|--------|--------|
+| TC-01, TC-08 | `access-group ... interface <hardware-name>` | ASA binds ACL to interface name (`Gi0/1`), not `nameif` label |
+| TC-21 | Named `ACL_INSIDE_TO_OUTSIDE` | Matches `_ACL_NAME_ZONE_RE` in `zones.py` |
+
+## Baseline vs spec (xfail)
+
+| TC | Spec (review) | Baseline (current code) | xfail |
+|----|---------------|-------------------------|-------|
+| TC-11 | Issue trace on unsupported child line | `unresolved_group_member_ref` issue exists; no trace on `strange-unsupported-token` line | trace on child line |
+| TC-17 | Partial snapshot + `no_acl_rules` | `DomainValidationError: No ACL rules found` | ideal partial import |
+| TC-16 | Cycle guard for nested groups | 2 membership edges materialized | optional cycle issues (not asserted) |
+| TC-10 | Optional `potential_duplicate_rule` | 2 rules, no duplicate issue | N/A (baseline OK) |
+
 ## Index
 
 | ID | File | Focus |

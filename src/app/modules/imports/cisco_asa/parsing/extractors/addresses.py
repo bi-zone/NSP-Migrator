@@ -22,7 +22,8 @@ def _parse_object_network_children(children: list[str]) -> dict:
 
     Produces payload dicts consumed by _addr_object_from_payload during
     normalizer header materialization. Recognized types: host, subnet,
-    range, fqdn. Unrecognized lines accumulate in raw_lines.
+    range, fqdn. Unrecognized lines (including object-level NAT) accumulate
+    in raw_lines and must not be treated as a new address object.
     """
     payload: dict = {}
     for line in children:
@@ -51,6 +52,57 @@ def _parse_object_network_children(children: list[str]) -> dict:
         else:
             payload.setdefault("raw_lines", []).append(line)
     return payload
+
+
+def _merge_object_network_declarations(
+    declarations: list[tuple[int, dict]],
+) -> tuple[int, dict]:
+    """Merge reopened object network stanzas that share one ASA name.
+
+    Cisco ASA may reopen ``object network NAME`` in a later stanza to attach
+    object-level NAT. That second header is not a new object: it has no
+    host/subnet/range/fqdn body, so treating it as last-wins replaces a
+    typed address with an empty payload and the normalizer emits
+    UNRESOLVED_ADDR under the same name.
+
+    Merge rules:
+    - address ``type`` and value fields come from the last typed stanza;
+    - ``description`` is the last non-empty description across stanzas;
+    - ``raw_lines`` (typically NAT) are concatenated from every stanza and
+      never become ``type``;
+    - source node is the typed stanza so trace points at the address
+      definition; if no stanza is typed, fall back to the last header.
+    """
+    typed = [
+        declaration
+        for declaration in declarations
+        if declaration[1].get("type") is not None
+    ]
+    node_idx, base_payload = typed[-1] if typed else declarations[-1]
+
+    merged = {
+        key: value
+        for key, value in base_payload.items()
+        if key not in {"description", "raw_lines"}
+    }
+
+    descriptions = [
+        payload["description"]
+        for _, payload in declarations
+        if payload.get("description")
+    ]
+    if descriptions:
+        merged["description"] = descriptions[-1]
+
+    raw_lines = [
+        line
+        for _, payload in declarations
+        for line in payload.get("raw_lines") or []
+    ]
+    if raw_lines:
+        merged["raw_lines"] = raw_lines
+
+    return node_idx, merged
 
 
 def _parse_object_group_network_children(children: list[str]) -> dict:
@@ -116,14 +168,7 @@ class AddressExtractor:
                 )
                 for node_idx in node_indices
             ]
-            node_idx, payload = next(
-                (
-                    declaration
-                    for declaration in reversed(declarations)
-                    if declaration[1].get("type") is not None
-                ),
-                declarations[-1],
-            )
+            node_idx, payload = _merge_object_network_declarations(declarations)
             source_span = tree.source_span(node_idx)
             results.append(
                 ParsedAddressObject(

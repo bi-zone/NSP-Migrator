@@ -32,6 +32,8 @@ from app.modules.execute.domain.enums import RuleMatchStatus
 from app.modules.execute.http.schemas import (
     ExecutePlanRuleResponse,
     PreparedExecutePlanResponse,
+    PushExecutePlanRulesResponse,
+    PushRuleResultResponse,
     SdwanRuleResponse,
 )
 
@@ -76,19 +78,29 @@ async def push_execute_plan_rules(
     push_execute_plan_rules_use_case: PushExecutePlanRulesUseCase = Depends(
         get_push_execute_plan_rules_use_case
     ),
-) -> list[SdwanRuleResponse]:
+) -> PushExecutePlanRulesResponse:
     result: PushExecutePlanRulesResult = await push_execute_plan_rules_use_case.execute(
         command=PushExecutePlanRulesCommand(execute_plan_id=execute_plan_id)
     )
-    return [SdwanRuleResponse.model_validate(rule) for rule in result.rules]
+    return PushExecutePlanRulesResponse(
+        rules=[SdwanRuleResponse.model_validate(rule) for rule in result.rules],
+        push_results=[
+            PushRuleResultResponse.model_validate(push_result)
+            for push_result in result.push_results
+        ],
+    )
 
 
 @execute_router.get("/sdwan/rules")
 async def get_sdwan_rules(
+    mapping_scope_id: UUID,
     rules_ids: list[int] = Query(default_factory=list),
     get_sdwan_rules_use_case: GetSdwanRulesUseCase = Depends(get_sdwan_rules_use_case),
 ) -> list[SdwanRuleResponse]:
     result: GetSdwanRulesResult = await get_sdwan_rules_use_case.execute(
-        query=GetSdwanRulesQuery(rules_ids=rules_ids)
+        query=GetSdwanRulesQuery(
+            mapping_scope_id=mapping_scope_id,
+            rules_ids=rules_ids,
+        )
     )
     return [SdwanRuleResponse.model_validate(rule) for rule in result.rules]

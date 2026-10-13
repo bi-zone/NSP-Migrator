@@ -1,6 +1,16 @@
 from enum import StrEnum
 
 
+class MappingScopeRulesPriority(StrEnum):
+    """
+    Describes placement for planned rules
+    """
+
+    LOCAL = "local"  # for Device (CPE)
+    PRE = "pre"  # for Group
+    POST = "post"  # for Group
+
+
 class MappingEntityType(StrEnum):
     """
     Canonical entity type processed by mapping module.
@@ -68,7 +78,6 @@ class CandidateMatchStrategy(StrEnum):
     NORMALIZED_NAME = "normalized_name"
     EXACT_VALUE = "exact_value"
     BUILTIN_ANY = "builtin_any"
-    SERVICE_ALIAS = "service_alias"
     SERVICE_SIGNATURE = "service_signature"
 
 

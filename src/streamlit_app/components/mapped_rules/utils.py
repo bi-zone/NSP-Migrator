@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
+
+import streamlit as st
 
 from app.modules.mapping.application.dto import (
     CanonicalEntityDisplayDTO,
@@ -83,12 +86,53 @@ class StatusStyleColor(StrEnum):
     GRAY = "GRAY"
 
 
-STATUS_CELL_STYLE: dict[StatusStyleColor, str] = {
-    StatusStyleColor.GREEN: "background-color: #dcfce7; color: #166534; font-weight: 600;",
-    StatusStyleColor.YELLOW: "background-color: #fef3c7; color: #92400e; font-weight: 700;",
-    StatusStyleColor.RED: "background-color: #fee2e2; color: #991b1b; font-weight: 700;",
-    StatusStyleColor.GRAY: "background-color: #f3f4f6; color: #374151;",
+_THEME_COLOR_BY_STATUS: dict[StatusStyleColor, str] = {
+    StatusStyleColor.GREEN: "green",
+    StatusStyleColor.YELLOW: "yellow",
+    StatusStyleColor.RED: "red",
+    StatusStyleColor.GRAY: "gray",
 }
+
+
+def status_cell_style(
+    status_color: StatusStyleColor,
+    *,
+    theme_type: Literal["light", "dark"] | None = None,
+) -> str:
+    """Return a dataframe-compatible status style for the active theme.
+
+    ``st.dataframe`` receives Pandas Styler values as literal CSS, so it cannot
+    resolve the page's ``--st-*`` variables. Read the configured theme palette
+    and pass the resolved colors to the dataframe instead.
+    """
+    selected_theme = theme_type or st.context.theme.type
+    if selected_theme not in ("light", "dark"):
+        selected_theme = "light"
+
+    color_name = _THEME_COLOR_BY_STATUS[status_color]
+    background = st.get_option(f"theme.{selected_theme}.{color_name}BackgroundColor")
+    text_color = st.get_option(f"theme.{selected_theme}.{color_name}TextColor")
+    if not isinstance(background, str) or not isinstance(text_color, str):
+        raise RuntimeError(
+            f"Missing {selected_theme} {color_name} status palette in config.toml"
+        )
+
+    font_weight = (
+        700
+        if status_color
+        in {
+            StatusStyleColor.YELLOW,
+            StatusStyleColor.RED,
+        }
+        else 600
+        if status_color == StatusStyleColor.GREEN
+        else 400
+    )
+    return (
+        f"background-color: {background}; color: {text_color}; "
+        f"font-weight: {font_weight};"
+    )
+
 
 MATCHED_STATUSES = {MappingResultStatus.MATCHED}
 

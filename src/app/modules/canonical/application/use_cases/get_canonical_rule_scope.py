@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from app.core.querying import Sorting
 from app.infrastructure.db.transactional import async_transactional
 from app.modules.canonical.application.dto import (
     CanonicalObjectDTO,
@@ -19,7 +20,10 @@ from app.modules.canonical.application.mappers import (
     zone_to_dto,
 )
 from app.modules.canonical.domain.exceptions import CanonicalModuleNotFoundError
-from app.modules.canonical.ports.rule_repository import CanonicalRuleFilters
+from app.modules.canonical.ports.rule_repository import (
+    CanonicalRuleFilters,
+    CanonicalRuleSortField,
+)
 from app.modules.canonical.ports.uow import CanonicalUoWPort
 from app.modules.canonical.services.group_expansion import expand_object_groups
 
@@ -32,6 +36,7 @@ class GetCanonicalRuleScopeQuery:
     limit: int | None = None
     offset: int | None = None
     filters: CanonicalRuleFilters = field(default_factory=CanonicalRuleFilters)
+    sort: Sorting[CanonicalRuleSortField] | None = None
     include_all_zones: bool = False
 
 
@@ -74,6 +79,7 @@ class GetCanonicalRuleScopeUseCase:
             filters=query.filters,
             limit=query.limit,
             offset=query.offset,
+            sort=query.sort,
         )
         rule_ids = [rule.id for rule in rules]
         operands = await self.uow.rules.get_operands_by_rule_ids(

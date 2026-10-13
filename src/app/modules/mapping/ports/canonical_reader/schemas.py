@@ -126,5 +126,6 @@ class CanonicalRule:
     canonical_snapshot_id: UUID
     name: str
     action: CanonicalRuleAction
+    priority: int
 
     operands: list[CanonicalRuleOperand]

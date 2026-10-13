@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -12,20 +13,24 @@ from app.modules.mapping.application.auto_select_with_auto_create import (
     AutoSelectEntitiesWithCreateForScopeResult,
     AutoSelectEntitiesWithCreateForScopeUseCase,
 )
+from app.modules.mapping.application.discover_allowed_vpcs import (
+    DiscoverAllowedVpcsQuery,
+    DiscoverAllowedVpcsUseCase,
+)
 from app.modules.mapping.application.get_sdwan_addr_objects import (
-    GetSdwanAddrObjectsResult,
+    GetSdwanAddrObjectsQuery,
     GetSdwanAddrObjectsUseCase,
 )
 from app.modules.mapping.application.get_sdwan_services import (
-    GetSdwanServicesResult,
+    GetSdwanServicesQuery,
     GetSdwanServicesUseCase,
 )
 from app.modules.mapping.application.get_sdwan_targets import (
-    GetSdwanTargetsResult,
+    GetSdwanTargetsQuery,
     GetSdwanTargetsUseCase,
 )
 from app.modules.mapping.application.get_sdwan_zones import (
-    GetSdwanZonesResult,
+    GetSdwanZonesQuery,
     GetSdwanZonesUseCase,
 )
 from app.modules.mapping.application.map_canonical_to_sdwan import (
@@ -51,6 +56,7 @@ from app.modules.mapping.application.select_sdwan_entity_directly import (
 from app.modules.mapping.di.dependencies import (
     get_assign_zone_for_scope_use_case,
     get_auto_select_entities_with_create_use_case,
+    get_discover_allowed_vpcs_use_case_dep,
     get_map_canonical_to_sdwan_use_case,
     get_sdwan_addr_objects_use_case_dep,
     get_sdwan_services_use_case_dep,
@@ -60,8 +66,12 @@ from app.modules.mapping.di.dependencies import (
     get_select_entity_with_create_on_sdwan_use_case,
     get_select_sdwan_entity_directly_use_case,
 )
-from app.modules.mapping.domain.enums import SDWANZoneDirection
+from app.modules.mapping.domain.enums import (
+    MappingScopeRulesPriority,
+    SDWANZoneDirection,
+)
 from app.modules.mapping.http.schemas import (
+    AllowedVPCResponseSchema,
     AutoSelectWithCreateResponseSchema,
     MapCanonicalRulesResponseSchema,
     MappingEntityResultSchema,
@@ -78,9 +88,14 @@ mapping_router = APIRouter(prefix="/mapping", tags=["mapping"])
 @mapping_router.post("/map-canonical-to-sdwan")
 async def map_canonical_rules_to_sdwan(
     mapping_scope_title: str = Query(..., description="mapping scope title"),
+    csp_profile_id: UUID = Query(..., description="CSP profile id"),
+    vpc_id: str = Query(..., min_length=1, description="CSP VPC id"),
     sdwan_target_id: str = Query(
         ...,
         description="sdwan target id (dev obj id)",
+    ),
+    rules_priority: Literal["local", "pre", "post"] = Query(
+        ..., description="Placement priority"
     ),
     canonical_snapshot_id: UUID = Query(
         ...,
@@ -98,9 +113,12 @@ async def map_canonical_rules_to_sdwan(
     res: MapCanonicalToSdwanResult = await map_canonical_to_sdwan_use_case.execute(
         command=MapCanonicalToSdwanCommand(
             mapping_scope_title=mapping_scope_title,
+            csp_profile_id=csp_profile_id,
+            vpc_id=vpc_id,
             canonical_snapshot_id=canonical_snapshot_id,
             canonical_rules_ids=canonical_rules_ids,
             sdwan_target_id=sdwan_target_id,
+            rules_priority=MappingScopeRulesPriority(rules_priority),
         )
     )
     return MapCanonicalRulesResponseSchema.model_validate(res)
@@ -158,6 +176,7 @@ async def auto_select_with_create_for_scope(
 @mapping_router.post("/mapping-results/{mapping_result_id}/select_candidate")
 async def select_candidate(
     mapping_result_id: UUID = Path(..., description="mapping entity result id"),
+    mapping_scope_id: UUID = Query(..., description="mapping scope id"),
     candidate_id: UUID = Query(..., description="candidate id"),
     select_entity_candidate_use_case: SelectEntityCandidateUseCase = Depends(
         get_select_entity_candidate_use_case
@@ -166,6 +185,7 @@ async def select_candidate(
 
     res: SelectEntityCandidateResult = await select_entity_candidate_use_case.execute(
         SelectEntityCandidateCommand(
+            mapping_scope_id=mapping_scope_id,
             mapping_entity_result_id=mapping_result_id,
             candidate_id=candidate_id,
         )
@@ -177,47 +197,70 @@ async def select_candidate(
 
 @mapping_router.get("/sdwan_zones")
 async def get_sdwan_zones(
+    mapping_scope_id: UUID = Query(...),
     get_sdwan_zones_use_case: GetSdwanZonesUseCase = Depends(
         get_sdwan_zones_use_case_dep
     ),
 ) -> list[SdwanZoneResponseSchema]:
-    res: GetSdwanZonesResult = await get_sdwan_zones_use_case.execute()
+    res = await get_sdwan_zones_use_case.execute(GetSdwanZonesQuery(mapping_scope_id))
     return [SdwanZoneResponseSchema.model_validate(z) for z in res.zones]
 
 
 @mapping_router.get("/sdwan_services")
 async def get_sdwan_services(
+    mapping_scope_id: UUID = Query(...),
     get_sdwan_services_use_case: GetSdwanServicesUseCase = Depends(
         get_sdwan_services_use_case_dep
     ),
 ) -> list[SdwanServiceResponseSchema]:
-    res: GetSdwanServicesResult = await get_sdwan_services_use_case.execute()
+    res = await get_sdwan_services_use_case.execute(
+        GetSdwanServicesQuery(mapping_scope_id)
+    )
     return [SdwanServiceResponseSchema.model_validate(s) for s in res.services]
 
 
 @mapping_router.get("/sdwan_addr_objects")
 async def get_sdwan_addr_objects(
+    mapping_scope_id: UUID = Query(...),
     get_sdwan_addr_objects_use_case: GetSdwanAddrObjectsUseCase = Depends(
         get_sdwan_addr_objects_use_case_dep
     ),
 ) -> SdwanAddrObjectsResponseSchema:
-    res: GetSdwanAddrObjectsResult = await get_sdwan_addr_objects_use_case.execute()
+    res = await get_sdwan_addr_objects_use_case.execute(
+        GetSdwanAddrObjectsQuery(mapping_scope_id)
+    )
     return SdwanAddrObjectsResponseSchema.model_validate(res)
 
 
 @mapping_router.get("/sdwan_targets")
 async def get_sdwan_targets(
+    csp_profile_id: UUID = Query(...),
+    vpc_id: str = Query(..., min_length=1),
     get_sdwan_targets_use_case: GetSdwanTargetsUseCase = Depends(
         get_sdwan_targets_use_case_dep
     ),
 ) -> list[SdwanTargetResponse]:
-    result: GetSdwanTargetsResult = await get_sdwan_targets_use_case.execute()
+    result = await get_sdwan_targets_use_case.execute(
+        GetSdwanTargetsQuery(csp_profile_id=csp_profile_id, vpc_id=vpc_id)
+    )
     return [SdwanTargetResponse.model_validate(t) for t in result.targets]
+
+
+@mapping_router.get("/sdwan_vpcs")
+async def get_sdwan_vpcs(
+    csp_profile_id: UUID = Query(...),
+    use_case: DiscoverAllowedVpcsUseCase = Depends(
+        get_discover_allowed_vpcs_use_case_dep
+    ),
+) -> list[AllowedVPCResponseSchema]:
+    result = await use_case.execute(DiscoverAllowedVpcsQuery(csp_profile_id))
+    return [AllowedVPCResponseSchema.model_validate(vpc) for vpc in result.vpcs]
 
 
 @mapping_router.post("/mapping-results/{mapping_result_id}/select_sdwan_directly")
 async def select_sdwan_entity_for_mapped_directly(
     mapping_result_id: UUID = Path(..., description="mapping entity result id"),
+    mapping_scope_id: UUID = Query(..., description="mapping scope id"),
     sdwan_entity_id: int = Query(..., description="sdwan entity id"),
     select_sdwan_entity_directly_use_case: SelectSdwanEntityDirectlyUseCase = Depends(
         get_select_sdwan_entity_directly_use_case
@@ -227,6 +270,7 @@ async def select_sdwan_entity_for_mapped_directly(
     res: SelectSdwanEntityDirectlyResult = (
         await select_sdwan_entity_directly_use_case.execute(
             SelectSdwanEntityDirectlyCommand(
+                mapping_scope_id=mapping_scope_id,
                 mapping_result_id=mapping_result_id,
                 sdwan_entity_id=sdwan_entity_id,
             )
@@ -238,6 +282,7 @@ async def select_sdwan_entity_for_mapped_directly(
 @mapping_router.post("/mapping-results/{mapping_result_id}/select_with_create_on_sdwan")
 async def select_sdwan_entity_with_create_on_sdwan(
     mapping_result_id: UUID = Path(..., description="mapping entity result id"),
+    mapping_scope_id: UUID = Query(..., description="mapping scope id"),
     select_entity_with_create_on_sdwan_use_case: SelectEntityWithCreateOnSdwanUseCase = Depends(
         get_select_entity_with_create_on_sdwan_use_case
     ),
@@ -246,6 +291,7 @@ async def select_sdwan_entity_with_create_on_sdwan(
     res: SelectEntityWithCreateOnSdwanResult = (
         await select_entity_with_create_on_sdwan_use_case.execute(
             command=SelectEntityWithCreateOnSdwanCommand(
+                mapping_scope_id=mapping_scope_id,
                 mapping_result_id=mapping_result_id,
             )
         )

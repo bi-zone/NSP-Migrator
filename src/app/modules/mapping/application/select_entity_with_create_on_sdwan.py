@@ -1,12 +1,15 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
 from app.integrations.sdwan_csp_api.gateways.enums import (
     SdwanAddrObjectType,
     SdwanServiceL4Proto,
 )
 from app.integrations.sdwan_csp_api.gateways.models import SdwanAddrObject, SdwanService
+from app.modules.mapping.application.refresh_mapping_scope_catalog_fingerprint import (
+    RefreshMappingScopeCatalogFingerprintCommand,
+    RefreshMappingScopeCatalogFingerprintUseCase,
+)
 from app.modules.mapping.domain.entities import MappingEntityResult, MappingScope
 from app.modules.mapping.domain.enums import MappingEntityType
 from app.modules.mapping.domain.exceptions import (
@@ -23,44 +26,46 @@ from app.modules.mapping.ports.canonical_reader.schemas import (
 from app.modules.mapping.ports.gateways import (
     CreateAddrObjectPayload,
     CreateServicePayload,
-    MappingSDWANGatewayPort,
+    MappingSDWANGatewayProviderPort,
 )
-from app.modules.mapping.ports.uow import MappingUnitOfWorkPort
+from app.modules.mapping.ports.repositories import MappingRepositoryPort
 
 
 @dataclass(frozen=True, slots=True)
 class SelectEntityWithCreateOnSdwanCommand:
-
+    mapping_scope_id: UUID
     mapping_result_id: UUID
+    refresh_catalog_fingerprint: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class SelectEntityWithCreateOnSdwanResult:
-
     mapping_result: MappingEntityResult
+    catalog_fingerprint_changed: bool
 
 
 class SelectEntityWithCreateOnSdwanUseCase:
     def __init__(
         self,
-        uow: MappingUnitOfWorkPort,
-        sdwan_gateway: MappingSDWANGatewayPort,
+        mapping_repo: MappingRepositoryPort,
+        sdwan_gateway_provider: MappingSDWANGatewayProviderPort,
         canonical_reader: CanonicalReaderPort,
+        refresh_mapping_scope_catalog_fingerprint: RefreshMappingScopeCatalogFingerprintUseCase,
     ) -> None:
-        self.uow = uow
-        self.sdwan_gateway = sdwan_gateway
+        self.mapping_repo = mapping_repo
+        self.sdwan_gateway_provider = sdwan_gateway_provider
         self.canonical_reader = canonical_reader
+        self.refresh_mapping_scope_catalog_fingerprint = (
+            refresh_mapping_scope_catalog_fingerprint
+        )
 
-    @async_transactional(read_only=False)
-    async def execute(
+    async def execute(  # noqa: C901
         self,
         command: SelectEntityWithCreateOnSdwanCommand,
     ) -> SelectEntityWithCreateOnSdwanResult:
 
-        mapping_result: MappingEntityResult | None = (
-            await self.uow.mapping_result_repo.get_result_by_id(
-                result_id=command.mapping_result_id
-            )
+        mapping_result: MappingEntityResult | None = await self.mapping_repo.get_result(
+            scope_id=command.mapping_scope_id, result_id=command.mapping_result_id
         )
         if not mapping_result:
             raise MappingModuleNotFoundError(
@@ -71,10 +76,8 @@ class SelectEntityWithCreateOnSdwanUseCase:
         if mapping_result.entity_type == MappingEntityType.ZONE:
             raise ValueError("Zone can't be created automatically on SD-WAN")
 
-        mapping_scope: MappingScope | None = (
-            await self.uow.mapping_scope_repo.get_scope_by_id(
-                scope_id=mapping_result.mapping_scope_id,
-            )
+        mapping_scope: MappingScope | None = await self.mapping_repo.get_scope_by_id(
+            scope_id=command.mapping_scope_id,
         )
         if not mapping_scope:
             raise ValueError(
@@ -83,8 +86,7 @@ class SelectEntityWithCreateOnSdwanUseCase:
 
         # -- ADDR OBJ
         if mapping_result.entity_type == MappingEntityType.ADDR:
-
-            canonical_addr_obj: CanonicalAddrObject | None = (
+            canonical_addr_obj: CanonicalAddrObject | None = (  # fmt: off
                 await self.canonical_reader.get_canonical_addr_object(
                     canonical_snapshot_id=mapping_scope.canonical_snapshot_id,
                     canonical_object_id=mapping_result.canonical_entity_id,
@@ -107,30 +109,33 @@ class SelectEntityWithCreateOnSdwanUseCase:
                     f"not supported for auto-creation"
                 )
 
-            created_addr_obj: SdwanAddrObject = (
-                await self.sdwan_gateway.create_addr_object(
-                    payload=CreateAddrObjectPayload(
-                        type=addr_object_type_map[canonical_addr_obj.kind],  # type: ignore
-                        prefix=canonical_addr_obj.cidr,
-                        host=(
-                            canonical_addr_obj.cidr.split("/")[0]
-                            if canonical_addr_obj.cidr
-                            else None
+            async with self.sdwan_gateway_provider.acquire(
+                mapping_scope.csp_profile_id,
+                mapping_scope.vpc_id,
+            ) as sdwan_gateway:
+                created_addr_obj: SdwanAddrObject = (
+                    await sdwan_gateway.create_addr_object(
+                        payload=CreateAddrObjectPayload(
+                            type=addr_object_type_map[canonical_addr_obj.kind],  # type: ignore
+                            prefix=canonical_addr_obj.cidr,
+                            host=(
+                                canonical_addr_obj.cidr.split("/")[0]
+                                if canonical_addr_obj.cidr
+                                else None
+                            ),
+                            fqdn=canonical_addr_obj.fqdn,
+                            ip_range_from=canonical_addr_obj.range_start,
+                            ip_range_to=canonical_addr_obj.range_end,
                         ),
-                        fqdn=canonical_addr_obj.fqdn,
-                        ip_range_from=canonical_addr_obj.range_start,
-                        ip_range_to=canonical_addr_obj.range_end,
                     )
                 )
-            )
 
             # -- assign created sd-wan entity to mapped entity
             updated_mapping_result = mapping_result.select_created(created_addr_obj.id)
 
         # -- SERVICE
         elif mapping_result.entity_type == MappingEntityType.SERVICE:
-
-            canonical_service: CanonicalService | None = (
+            canonical_service: CanonicalService | None = (  # fmt: off
                 await self.canonical_reader.get_canonical_service(
                     canonical_snapshot_id=mapping_scope.canonical_snapshot_id,
                     canonical_object_id=mapping_result.canonical_entity_id,
@@ -152,17 +157,21 @@ class SelectEntityWithCreateOnSdwanUseCase:
                     f"not supported for auto-creation"
                 )
 
-            created_service: SdwanService = await self.sdwan_gateway.create_service(
-                payload=CreateServicePayload(
-                    name=canonical_service.name,
-                    l4_proto=service_proto_map[
-                        canonical_service.kind  # type: ignore
-                    ],  # `protocol` field not usable here
-                    port_start=canonical_service.port_from,
-                    port_end=canonical_service.port_to,
-                    icmp_codes=None,
+            async with self.sdwan_gateway_provider.acquire(
+                mapping_scope.csp_profile_id,
+                mapping_scope.vpc_id,
+            ) as sdwan_gateway:
+                created_service: SdwanService = await sdwan_gateway.create_service(
+                    payload=CreateServicePayload(
+                        name=canonical_service.name,
+                        l4_proto=service_proto_map[
+                            canonical_service.kind  # type: ignore
+                        ],  # `protocol` field not usable here
+                        port_start=canonical_service.port_from,
+                        port_end=canonical_service.port_to,
+                        icmp_codes=None,
+                    )
                 )
-            )
 
             # -- assign created sd-wan entity to mapped entity
             updated_mapping_result = mapping_result.select_created(
@@ -174,7 +183,20 @@ class SelectEntityWithCreateOnSdwanUseCase:
                 f"Unexpected entity type `{mapping_result.entity_type}`"
             )
 
-        await self.uow.mapping_result_repo.save_result(updated_mapping_result)
+        await self.mapping_repo.save_result(updated_mapping_result)
+
+        catalog_fingerprint_changed = False
+        if command.refresh_catalog_fingerprint:
+            refresh_result = (
+                await self.refresh_mapping_scope_catalog_fingerprint.execute(
+                    RefreshMappingScopeCatalogFingerprintCommand(
+                        mapping_scope_id=mapping_scope.id
+                    )
+                )
+            )
+            catalog_fingerprint_changed = refresh_result.catalog_fingerprint_changed
+
         return SelectEntityWithCreateOnSdwanResult(
-            mapping_result=updated_mapping_result
+            mapping_result=updated_mapping_result,
+            catalog_fingerprint_changed=catalog_fingerprint_changed,
         )

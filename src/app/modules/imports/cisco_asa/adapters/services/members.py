@@ -59,7 +59,7 @@ def _register_service_payload(
         port = parse_port_token(str(payload["port"]))
         if port is None:
             return None
-        obj_key = f"service:tcp-udp:{port}-{port}"
+        obj_key = service_object_key("tcp-udp", port, port)
     elif proto in {"icmp", "icmp6"}:
         icmp = (payload.get("icmp") or "any").lower().replace(" ", "-")
         obj_key = f"service:{proto}:icmp-{icmp}"

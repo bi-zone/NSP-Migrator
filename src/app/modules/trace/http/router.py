@@ -50,6 +50,7 @@ async def list_trace_raw_to_canonical(
         get_trace_for_source_snapshot_use_case
     ),
 ) -> TraceListResponse:
+    # TODO(querying): migrate pagination and trace filters to a composed query model.
     if canonical_snapshot_id is None and source_snapshot_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

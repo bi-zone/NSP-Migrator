@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
 from app.integrations.sdwan_csp_api.gateways.models import (
     SdwanAddrObject,
     SdwanService,
@@ -13,73 +12,69 @@ from app.modules.mapping.domain.exceptions import (
     MappingModuleDomainValidationError,
     MappingModuleNotFoundError,
 )
-from app.modules.mapping.ports.gateways import MappingSDWANGatewayPort
-from app.modules.mapping.ports.uow import MappingUnitOfWorkPort
+from app.modules.mapping.ports.gateways import MappingSDWANGatewayProviderPort
+from app.modules.mapping.ports.repositories import MappingRepositoryPort
 
 
 @dataclass(frozen=True, slots=True)
 class SelectSdwanEntityDirectlyCommand:
-
+    mapping_scope_id: UUID
     mapping_result_id: UUID
     sdwan_entity_id: int
 
 
 @dataclass(frozen=True, slots=True)
 class SelectSdwanEntityDirectlyResult:
-
     mapping_result: MappingEntityResult
 
 
 class SelectSdwanEntityDirectlyUseCase:
     def __init__(
         self,
-        uow: MappingUnitOfWorkPort,
-        sdwan_gateway: MappingSDWANGatewayPort,
+        mapping_repo: MappingRepositoryPort,
+        sdwan_gateway_provider: MappingSDWANGatewayProviderPort,
     ) -> None:
-        self.uow = uow
-        self.sdwan_gateway = sdwan_gateway
+        self.mapping_repo = mapping_repo
+        self.sdwan_gateway_provider = sdwan_gateway_provider
 
-    @async_transactional(read_only=False)
     async def execute(
         self,
         command: SelectSdwanEntityDirectlyCommand,
     ) -> SelectSdwanEntityDirectlyResult:
 
         # -- find mapped canonical entity
-        mapping_result: MappingEntityResult | None = (
-            await self.uow.mapping_result_repo.get_result_by_id(
-                result_id=command.mapping_result_id
-            )
+        mapping_result: MappingEntityResult | None = await self.mapping_repo.get_result(
+            scope_id=command.mapping_scope_id, result_id=command.mapping_result_id
         )
         if not mapping_result:
             raise MappingModuleNotFoundError(
                 f"Mapping Result with id {command.mapping_result_id} not found"
             )
 
-        # -- get sd-wan entity
-        sdwan_entity: SdwanZone | SdwanService | SdwanAddrObject | None = None
+        scope = await self.mapping_repo.get_scope_by_id(command.mapping_scope_id)
+        if scope is None:
+            raise MappingModuleNotFoundError("Mapping scope not found")
 
-        match mapping_result.entity_type:
-
-            case MappingEntityType.ZONE:
-                sdwan_entity = await self.sdwan_gateway.get_zone(
-                    command.sdwan_entity_id
-                )
-
-            case MappingEntityType.SERVICE:
-                sdwan_entity = await self.sdwan_gateway.get_service(
-                    command.sdwan_entity_id
-                )
-
-            case MappingEntityType.ADDR:
-                sdwan_entity = await self.sdwan_gateway.get_addr_object(
-                    command.sdwan_entity_id
-                )
-
-            case _:
-                raise MappingModuleDomainValidationError(
-                    f"Invalid entity type `{mapping_result.entity_type}`"
-                )
+        async with self.sdwan_gateway_provider.acquire(
+            scope.csp_profile_id,
+            scope.vpc_id,
+        ) as sdwan_gateway:
+            sdwan_entity: SdwanZone | SdwanService | SdwanAddrObject | None = None
+            match mapping_result.entity_type:
+                case MappingEntityType.ZONE:
+                    sdwan_entity = await sdwan_gateway.get_zone(command.sdwan_entity_id)
+                case MappingEntityType.SERVICE:
+                    sdwan_entity = await sdwan_gateway.get_service(
+                        command.sdwan_entity_id
+                    )
+                case MappingEntityType.ADDR:
+                    sdwan_entity = await sdwan_gateway.get_addr_object(
+                        command.sdwan_entity_id
+                    )
+                case _:
+                    raise MappingModuleDomainValidationError(
+                        f"Invalid entity type `{mapping_result.entity_type}`"
+                    )
 
         if sdwan_entity is None:
             raise MappingModuleNotFoundError(
@@ -91,6 +86,6 @@ class SelectSdwanEntityDirectlyUseCase:
         updated_mapping_result = mapping_result.select_direct(
             sdwan_entity_id=sdwan_entity.id,
         )
-        await self.uow.mapping_result_repo.save_result(updated_mapping_result)
+        await self.mapping_repo.save_result(updated_mapping_result)
 
         return SelectSdwanEntityDirectlyResult(mapping_result=updated_mapping_result)

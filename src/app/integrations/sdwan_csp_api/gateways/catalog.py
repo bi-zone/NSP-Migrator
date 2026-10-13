@@ -1,3 +1,4 @@
+import logging
 from ipaddress import IPv4Address, IPv4Network
 
 from app.integrations.sdwan_csp_api.gateways.enums import (
@@ -25,9 +26,10 @@ from app.integrations.sdwan_csp_api.schemas import (
     ZoneResponse,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class SDWANCatalogGateway(SDWANCatalogGatewayPort):
-
     def __init__(self, sdwan_http_client: ISDWANCspHttpClient) -> None:
         self.sdwan_http_client = sdwan_http_client
 
@@ -51,9 +53,17 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
         receive an empty result instead of accidentally loading the full catalog.
         """
         if ids == []:
-            return []
+            return []  # provided empty filter returns empty result
 
-        zones: list[ZoneResponse] = await self.sdwan_http_client.get_zones(ids=ids)
+        elif ids is None:
+            zones: list[ZoneResponse] = (  # fmt: no
+                await self.sdwan_http_client.get_zones()  # get full list
+            )
+        else:
+            zones: list[ZoneResponse] = await self.sdwan_http_client.get_zones(  # type: ignore
+                ids=ids  # get with filtering
+            )
+
         return [
             SdwanZone(
                 id=zone.id,
@@ -68,15 +78,18 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
         """Return services by ids, or the full service list when ids is None."""
         if ids == []:
             return []
-
-        services: list[ServiceResponse] = await self.sdwan_http_client.get_services(
-            ids=ids
-        )
+        elif ids is None:
+            services: list[ServiceResponse] = (  # fmt: no
+                await self.sdwan_http_client.get_services()
+            )
+        else:
+            services: list[ServiceResponse] = (  # type: ignore
+                await self.sdwan_http_client.get_services(ids=ids)
+            )
 
         services_result: list[SdwanService] = []
 
         for service in services:
-
             ranges = None
             codes = None
 
@@ -144,9 +157,9 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
         return networks_result
 
     async def get_sdwan_device_objects(self) -> list[SdwanDeviceObject]:
-        device_objects: list[DeviceObjectResponse] = (
-            await self.sdwan_http_client.get_device_objects()
-        )
+        device_objects: list[
+            DeviceObjectResponse
+        ] = await self.sdwan_http_client.get_device_objects()
         return [
             SdwanDeviceObject(
                 dev_obj_id=d.dev_obj_id,
@@ -157,14 +170,16 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
             for d in device_objects
         ]
 
-    async def get_sdwan_device_object(self, dev_obj_id: str) -> SdwanDeviceObject:
-        device_objects: list[DeviceObjectResponse] = (
-            await self.sdwan_http_client.get_device_objects(
-                dev_obj_id=dev_obj_id,
-            )
+    async def get_sdwan_device_object(
+        self, dev_obj_id: str
+    ) -> SdwanDeviceObject | None:
+        device_objects: list[
+            DeviceObjectResponse
+        ] = await self.sdwan_http_client.get_device_objects(
+            dev_obj_id=dev_obj_id,
         )
         if not device_objects:
-            raise ValueError(f"No found device object {dev_obj_id}")
+            return None
 
         device_obj: DeviceObjectResponse = device_objects[0]
 
@@ -219,9 +234,13 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
 
             return group_ids
 
-        initial_objects = await self.sdwan_http_client.get_addr_objects(
-            ids=initial_ids,
-        )
+        # -- load initial address objects
+        if initial_ids is None:
+            initial_objects = await self.sdwan_http_client.get_addr_objects()
+        else:
+            initial_objects = await self.sdwan_http_client.get_addr_objects(
+                ids=initial_ids,
+            )
 
         current_group_ids: list[int] = _save_objects_and_return_groups_ids(
             initial_objects
@@ -231,7 +250,7 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
             if not current_group_ids:
                 break
 
-            children = await self.sdwan_http_client.get_addr_objects_by_parents_ids(
+            children = await self.sdwan_http_client.get_addr_objects(
                 parents_ids=current_group_ids,
             )
 
@@ -248,7 +267,7 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
 
         return list(loaded_by_key.values())
 
-    async def _get_addr_objects_from_resp(  # noqa: C901
+    async def _get_addr_objects_from_resp(
         self,
         addr_objs_responses: list[AddrObjectResponse],
     ) -> list[SdwanAddrObject]:
@@ -279,7 +298,6 @@ class SDWANCatalogGateway(SDWANCatalogGatewayPort):
         addr_objects: list[SdwanAddrObject] = []
 
         for ao_resp in addr_objs_responses:
-
             match ao_resp.data.type:
                 case AddrObjectType.HOST:
                     addr_objects.append(

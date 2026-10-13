@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 
+from app.core.hashers import json_hash
 from app.integrations.sdwan_csp_api.gateways.enums import (
     SdwanAddrObjectType,
     SdwanDeviceObjectType,
@@ -105,6 +106,68 @@ class SdwanFullCatalog:
     services: list[SdwanService]
     addr_objs: list[SdwanAddrObject]
     networks: list[SdwanNetwork]
+
+    def get_fingerprint(self) -> str:
+        """Return an order-independent fingerprint of this full SD-WAN catalog."""
+        return json_hash(
+            {
+                "zones": [
+                    {
+                        "id": zone.id,
+                        "zone_id": zone.zone_id,
+                        "name": zone.name,
+                        "type": zone.type.value,
+                    }
+                    for zone in self.zones
+                ],
+                "services": [
+                    {
+                        "id": service.id,
+                        "name": service.name,
+                        "l4_proto": service.l4_proto.value,
+                        "ranges": (
+                            [list(range_) for range_ in service.ranges]
+                            if service.ranges is not None
+                            else None
+                        ),
+                        "codes": (
+                            list(service.codes) if service.codes is not None else None
+                        ),
+                    }
+                    for service in self.services
+                ],
+                "addr_objects": [
+                    {
+                        "id": addr_obj.id,
+                        "parents": list(addr_obj.parents),
+                        "name": addr_obj.name,
+                        "type": addr_obj.type.value,
+                        "network_id": addr_obj.network_id,
+                        "network": str(addr_obj.network) if addr_obj.network else None,
+                        "prefix": str(addr_obj.prefix) if addr_obj.prefix else None,
+                        "host": str(addr_obj.host) if addr_obj.host else None,
+                        "fqdn": addr_obj.fqdn,
+                        "ip_range_from": (
+                            str(addr_obj.ip_range_from)
+                            if addr_obj.ip_range_from
+                            else None
+                        ),
+                        "ip_range_to": (
+                            str(addr_obj.ip_range_to) if addr_obj.ip_range_to else None
+                        ),
+                        "addr_group": addr_obj.addr_group,
+                    }
+                    for addr_obj in self.addr_objs
+                ],
+                "networks": [
+                    {
+                        "network_id": network.network_id,
+                        "net": str(network.net),
+                    }
+                    for network in self.networks
+                ],
+            }
+        )
 
 
 @dataclass(slots=True, frozen=True)

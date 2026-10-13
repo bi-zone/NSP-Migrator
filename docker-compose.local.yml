@@ -15,9 +15,9 @@ services:
       - ./src/streamlit_app:/app/src/streamlit_app
       - ./migrations:/app/migrations
       - ./tests:/app/tests
+      - ./htmlcov:/app/htmlcov
       - ./docs:/app/docs:ro
       - ./scripts:/app/scripts
-      - ./client_cert.pem:/app/client_cert.pem:ro
 
   app:
     image: policy-migrator-api:dev
@@ -29,6 +29,6 @@ services:
       - ./src/streamlit_app:/app/src/streamlit_app
       - ./migrations:/app/migrations
       - ./tests:/app/tests
+      - ./htmlcov:/app/htmlcov
       - ./docs:/app/docs:ro
       - ./scripts:/app/scripts
-      - ./client_cert.pem:/app/client_cert.pem:ro

@@ -82,8 +82,8 @@ help: ## Show commands, modes, and commonly used variables
 	@printf '%s\n' "  STREAMLIT_HOST_PORT      Streamlit host port from .env (default: 8501)"
 	@printf '%s\n' "  API_HOST_PORT            FastAPI host port from .env (default: 8000)"
 
-doctor: ## Diagnose Docker, database/CSP environment, and the PEM bundle
-	@ENV_FILE=.env CERT_FILE=client_cert.pem ./scripts/doctor.sh
+doctor: ## Diagnose Docker, database, and CSP environment
+	@ENV_FILE=.env ./scripts/doctor.sh
 
 env-init: ## Create .env from .env.example without overwriting an existing file
 	@if [ -e .env ]; then \

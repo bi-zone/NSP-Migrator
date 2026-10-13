@@ -2,7 +2,6 @@ from collections import defaultdict
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.infrastructure.db.transactional import async_transactional
 from app.integrations.sdwan_csp_api.gateways.models import SdwanFullCatalog
 from app.modules.mapping.application.dto import (
     CanonicalEntityDisplayDTO,
@@ -40,8 +39,8 @@ from app.modules.mapping.ports.canonical_reader.schemas import (
     CanonicalServiceKind,
     CanonicalZone,
 )
-from app.modules.mapping.ports.gateways import MappingSDWANGatewayPort
-from app.modules.mapping.ports.uow import MappingUnitOfWorkPort
+from app.modules.mapping.ports.gateways import MappingSDWANGatewayProviderPort
+from app.modules.mapping.ports.repositories import MappingRepositoryPort
 from app.modules.mapping.services.mapping_rules.canonical_addr_objs_index import (
     CanonicalAddrGroupMember,
     CanonicalAddrObjectIndex,
@@ -138,15 +137,14 @@ class GetMappingScopeRulesProjectionUseCase:
 
     def __init__(
         self,
-        uow: MappingUnitOfWorkPort,
-        sdwan_gateway: MappingSDWANGatewayPort,
+        mapping_repo: MappingRepositoryPort,
+        sdwan_gateway_provider: MappingSDWANGatewayProviderPort,
         canonical_reader: CanonicalReaderPort,
     ) -> None:
-        self.uow = uow
-        self.sdwan_gateway = sdwan_gateway
+        self.mapping_repo = mapping_repo
+        self.sdwan_gateway_provider = sdwan_gateway_provider
         self.canonical_reader = canonical_reader
 
-    @async_transactional(read_only=True)
     async def execute(
         self,
         query: GetMappingScopeRulesProjectionQuery,
@@ -169,22 +167,20 @@ class GetMappingScopeRulesProjectionUseCase:
                 If loaded data is structurally inconsistent.
         """
 
-        mapping_scope: MappingScope | None = (
-            await self.uow.mapping_scope_repo.get_scope_by_id(
-                scope_id=query.mapping_scope_id,
-                with_rules=True,
-            )
+        mapping_scope: MappingScope | None = await self.mapping_repo.get_scope_by_id(
+            scope_id=query.mapping_scope_id,
+            with_rules=True,
         )
         if mapping_scope is None:
             raise MappingModuleNotFoundError(
                 f"Mapping scope {query.mapping_scope_id} not found"
             )
 
-        mapping_results: list[MappingEntityResult] = (
-            await self.uow.mapping_result_repo.list_by_scope(
-                scope_id=mapping_scope.id,
-                with_candidates=True,
-            )
+        mapping_results: list[
+            MappingEntityResult
+        ] = await self.mapping_repo.list_results(
+            scope_id=mapping_scope.id,
+            with_candidates=True,
         )
 
         if mapping_scope.rules is None:
@@ -197,11 +193,11 @@ class GetMappingScopeRulesProjectionUseCase:
             rule.canonical_rule_id for rule in mapping_rules
         ]
 
-        canonical_rules: list[CanonicalRule] = (
-            await self.canonical_reader.get_canonical_scope_rules(
-                canonical_snapshot_id=mapping_scope.canonical_snapshot_id,
-                canonical_rules_ids=canonical_rule_ids,
-            )
+        canonical_rules: list[
+            CanonicalRule
+        ] = await self.canonical_reader.get_canonical_scope_rules(
+            canonical_snapshot_id=mapping_scope.canonical_snapshot_id,
+            canonical_rules_ids=canonical_rule_ids,
         )
         canonical_scope_entities: CanonicalScopeEntities = (
             await self.canonical_reader.get_canonical_scope_entities_data(
@@ -210,9 +206,13 @@ class GetMappingScopeRulesProjectionUseCase:
             )
         )
 
-        sdwan_full_catalog: SdwanFullCatalog = (
-            await self.sdwan_gateway.get_sdwan_full_catalog()
-        )
+        async with self.sdwan_gateway_provider.acquire(
+            mapping_scope.csp_profile_id,
+            mapping_scope.vpc_id,
+        ) as sdwan_gateway:
+            sdwan_full_catalog: SdwanFullCatalog = (
+                await sdwan_gateway.get_sdwan_full_catalog()
+            )
 
         projection = _MappingScopeRulesProjectionBuilder(
             mapping_scope=mapping_scope,
@@ -350,7 +350,7 @@ class _MappingScopeRulesProjectionBuilder:
         mapped_rule_rows: list[MappingScopeRuleDisplayDTO] = []
         details_by_rule_id: dict[UUID, MappingCanonicalRuleProjectionDTO] = {}
 
-        for mapping_rule in self.mapping_rules:
+        for mapping_rule in sorted(self.mapping_rules, key=lambda r: r.priority):
             canonical_rule = self._get_canonical_rule(mapping_rule.canonical_rule_id)
             details = self._build_rule_details(
                 mapping_rule=mapping_rule,
@@ -904,6 +904,7 @@ class _MappingScopeRulesProjectionBuilder:
             canonical_rule_id=canonical_rule.id,
             name=canonical_rule.name,
             action=canonical_rule.action,
+            priority=canonical_rule.priority,
             src_zones=role_entities[CanonicalRuleOperandRole.SRC_ZONE],
             dst_zones=role_entities[CanonicalRuleOperandRole.DST_ZONE],
             src_addr_objects=role_entities[CanonicalRuleOperandRole.SRC_OBJECT],
@@ -984,6 +985,7 @@ class _MappingScopeRulesProjectionBuilder:
             canonical_rule_id=mapping_rule.canonical_rule_id,
             name=mapping_rule.name,
             action=mapping_rule.action,
+            priority=mapping_rule.priority,
             status=details.status,
             src_zones=self._extract_sdwan_entities(details.src_zones),
             dst_zones=self._extract_sdwan_entities(details.dst_zones),
@@ -1021,23 +1023,32 @@ class _MappingScopeRulesProjectionBuilder:
         entities. Canonical-only group rows do not affect status because they
         have no SD-WAN side.
 
-        Additional SD-WAN policy requirement:
+        Additional SD-WAN policy requirements:
 
-            A mapped SD-WAN rule must have at least one selected source zone
-            and at least one selected destination zone.
+        - every one of the five rule roles must contain at least one effective
+          SD-WAN object;
+        - every effective object must be MATCHED and have a selected SD-WAN id.
 
-        Therefore, missing selected SRC or DST zone adds an artificial
-        UNRESOLVED status even if canonical rule has no zone operands.
+        A missing role adds an artificial UNRESOLVED status. Object-level
+        statuses remain part of regular aggregation, so AMBIGUOUS and
+        UNRESOLVED objects keep their specific meaning.
         """
 
         statuses: list[MappingResultStatus] = cls._extract_mapping_statuses(
             src_zones + dst_zones + src_addr_objects + dst_addr_objects + services
         )
 
-        if not cls._has_selected_sdwan_entity(src_zones):
-            statuses.append(MappingResultStatus.UNRESOLVED)
-
-        if not cls._has_selected_sdwan_entity(dst_zones):
+        required_roles = (
+            src_zones,
+            dst_zones,
+            src_addr_objects,
+            dst_addr_objects,
+            services,
+        )
+        if not all(
+            any(row.sdwan is not None for row in role_rows)
+            for role_rows in required_roles
+        ):
             statuses.append(MappingResultStatus.UNRESOLVED)
 
         return cls._aggregate_mapping_statuses(statuses)
@@ -1053,28 +1064,21 @@ class _MappingScopeRulesProjectionBuilder:
         not directly participate in status aggregation.
         """
 
-        return [
-            row.sdwan.match_status
-            for row in rows
-            if row.sdwan is not None and row.sdwan.match_status is not None
-        ]
+        statuses: list[MappingResultStatus] = []
+        for row in rows:
+            if row.sdwan is None or row.sdwan.match_status is None:
+                continue
 
-    @staticmethod
-    def _has_selected_sdwan_entity(
-        rows: list[CanonicalToSdwanEntityProjectionDTO],
-    ) -> bool:
-        """
-        Return True if role has at least one matched SD-WAN entity.
+            if (
+                row.sdwan.match_status == MappingResultStatus.MATCHED
+                and row.sdwan.sdwan_id is None
+            ):
+                statuses.append(MappingResultStatus.UNRESOLVED)
+                continue
 
-        Used for mandatory source and destination zone checks.
-        """
+            statuses.append(row.sdwan.match_status)
 
-        return any(
-            row.sdwan is not None
-            and row.sdwan.match_status == MappingResultStatus.MATCHED
-            and row.sdwan.sdwan_id is not None
-            for row in rows
-        )
+        return statuses
 
     @staticmethod
     def _aggregate_mapping_statuses(
@@ -1204,6 +1208,9 @@ class _MappingScopeRulesProjectionBuilder:
             HOST / SUBNET / ANY_ADDR:
                 cidr
 
+            UNRESOLVED_ADDR:
+                object name
+
             RANGE:
                 range_start-range_end
 
@@ -1230,6 +1237,9 @@ class _MappingScopeRulesProjectionBuilder:
         if obj.kind == CanonicalAddrObjKind.FQDN:
             return obj.fqdn
 
+        if obj.kind == CanonicalAddrObjKind.UNRESOLVED_ADDR:
+            return obj.name
+
         return obj.name
 
     @classmethod
@@ -1246,7 +1256,7 @@ class _MappingScopeRulesProjectionBuilder:
                 object name
 
             TCP / UDP with port range:
-                tcp/1000-2000
+                tcp/22 or tcp/1000-2000
 
             ICMP:
                 icmp/type=8/code=0 (or without code section)
@@ -1262,7 +1272,7 @@ class _MappingScopeRulesProjectionBuilder:
             return obj.name
 
         if obj.kind in (CanonicalServiceKind.TCP, CanonicalServiceKind.UDP):
-            return f"{obj.protocol}/{obj.port_from}-{obj.port_to}"
+            return cls._canonical_l4_port_str_value(obj)
 
         if obj.kind == CanonicalServiceKind.ICMP:
             proto = obj.protocol or obj.kind.value
@@ -1280,3 +1290,11 @@ class _MappingScopeRulesProjectionBuilder:
             return obj.protocol or obj.name
 
         return obj.name
+
+    @classmethod
+    def _canonical_l4_port_str_value(cls, obj: CanonicalService) -> str | None:
+        if obj.port_from is None:
+            return obj.protocol
+        if obj.port_to is None or obj.port_to == obj.port_from:
+            return f"{obj.protocol}/{obj.port_from}"
+        return f"{obj.protocol}/{obj.port_from}-{obj.port_to}"

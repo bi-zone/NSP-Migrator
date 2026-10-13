@@ -212,6 +212,7 @@ class CanonicalReader(CanonicalReaderPort):
                 canonical_snapshot_id=rule.canonical_snapshot_id,
                 name=rule.name,
                 action=CanonicalRuleAction(rule.action),
+                priority=rule.priority,
                 operands=[
                     CanonicalRuleOperand(
                         id=operand.id,

@@ -95,6 +95,7 @@ class AutoSelectWithCreateResponseSchema(BaseResponseSchema):
     failed_selects: int
     success_selects: int
     errors: list[str]
+    catalog_fingerprint_changed: bool
 
 
 # SD-WAN catalog response schemas
@@ -135,3 +136,11 @@ class SdwanTargetResponse(BaseResponseSchema):
     dev_obj_id: str
     name: str
     cpe_id: str | None
+
+
+class AllowedVPCResponseSchema(BaseResponseSchema):
+    vpc_id: str
+    customer_name: str
+    project_name: str
+    cuid: str
+    pid: str

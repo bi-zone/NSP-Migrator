@@ -8,6 +8,7 @@ from app.modules.trace.domain.enums import TraceCanonicalKind, TraceCanonicalRol
 from tests.modules.imports.cisco_asa.helpers import (
     assert_rule_has_trace,
     assert_trace_line,
+    issue_codes,
     line_number_for_substring,
     load_cfg,
     normalize_cfg,
@@ -52,7 +53,10 @@ def test_tc_02_object_header_trace():
     assert hits
     assert hits[0].source_line_start == obj_line
     assert hits[0].source_line_end == obj_line + 1
-    assert hits[0].source_fragment == ("object network OBJ_APP\n host 10.10.10.10")
+    assert hits[0].source_fragment == (
+        "object network OBJ_APP\n"
+        " host 10.10.10.10"
+    )
     assert hits[0].canonical_role == TraceCanonicalRole.HEADER.value
 
 
@@ -93,7 +97,9 @@ def test_tc_04_service_operand_trace():
     assert len(object_traces) == 1
     assert object_traces[0].source_line_end == object_traces[0].source_line_start + 2
     assert object_traces[0].source_fragment == (
-        "object-group service WEB_PORTS tcp\n port-object eq www\n port-object eq https"
+        "object-group service WEB_PORTS tcp\n"
+        " port-object eq www\n"
+        " port-object eq https"
     )
 
 
@@ -110,43 +116,21 @@ def test_tc_19_service_object_trace_contains_full_stanza():
     assert object_traces[0].source_line_start == 1
     assert object_traces[0].source_line_end == 2
     assert object_traces[0].source_fragment == (
-        "object service SVC_RDP\n service tcp destination eq 3389"
+        "object service SVC_RDP\n"
+        " service tcp destination eq 3389"
     )
 
 
-def test_tc_05_issue_trace_on_acl_line():
-    cfg = load_cfg("TC_05")
+def test_tc_05_unresolved_zone_has_rule_trace_without_issue_trace():
     outcome = normalize_cfg("TC_05")
-    acl_line = line_number_for_substring(cfg, "access-list ACL_ORPHAN")
-    issue = next(
-        i for i in outcome.canonical.issues if i.issue_code == "unresolved_zone"
-    )
-    issue_traces = trace_for_entity(
-        outcome.trace.records,
-        canonical_kind=TraceCanonicalKind.ISSUE,
-        canonical_id=issue.id,
-    )
-    assert issue_traces
-    assert issue_traces[0].source_line_start == acl_line
+    assert "unresolved_zone" not in issue_codes(outcome)
     assert_rule_has_trace(outcome, outcome.canonical.rules[0].id)
 
 
-def test_tc_06_global_issue_trace():
-    cfg = load_cfg("TC_06")
+def test_tc_06_global_scope_has_rule_trace_without_issue_trace():
     outcome = normalize_cfg("TC_06")
-    acl_line = line_number_for_substring(cfg, "access-list ACL_A")
-    issue = next(
-        i
-        for i in outcome.canonical.issues
-        if i.issue_code == "global_acl_scope_no_interface_zones"
-    )
-    hits = trace_for_entity(
-        outcome.trace.records,
-        canonical_kind=TraceCanonicalKind.ISSUE,
-        canonical_id=issue.id,
-    )
-    assert hits
-    assert hits[0].source_line_start == acl_line
+    assert "global_acl_scope_no_interface_zones" not in issue_codes(outcome)
+    assert_rule_has_trace(outcome, outcome.canonical.rules[0].id)
 
 
 def test_tc_11_issue_trace_baseline():
@@ -167,19 +151,10 @@ def test_tc_11_trace_on_unsupported_line_spec():
     assert any(r.canonical_kind == TraceCanonicalKind.ISSUE for r in hits)
 
 
-def test_tc_12_issue_and_rule_same_line():
-    cfg = load_cfg("TC_12")
+def test_tc_12_unresolved_zone_keeps_rule_trace_only():
     outcome = normalize_cfg("TC_12")
-    acl_line = line_number_for_substring(cfg, "access-list RANDOM_ACL")
-    assert_trace_line(outcome.trace.records, acl_line, TraceCanonicalKind.RULE)
-    issue = next(
-        i for i in outcome.canonical.issues if i.issue_code == "unresolved_zone"
-    )
-    assert trace_for_entity(
-        outcome.trace.records,
-        canonical_kind=TraceCanonicalKind.ISSUE,
-        canonical_id=issue.id,
-    )
+    assert "unresolved_zone" not in issue_codes(outcome)
+    assert_rule_has_trace(outcome, outcome.canonical.rules[0].id)
 
 
 def test_tc_13_every_rule_has_rule_trace():

@@ -4,6 +4,7 @@ from typing import Any, TypeAlias
 
 import pandas as pd
 import streamlit as st
+from pandas.io.formats.style import Styler
 from streamlit.elements.lib.column_types import ColumnConfig
 
 from app.modules.mapping.application.dto import (
@@ -19,7 +20,6 @@ from streamlit_app.components.mapped_rules.utils import (
     ROLE_BY_COLUMN,
     ROLE_COLUMN_BY_ROLE,
     SELECTED_MAPPED_RULE_ID_KEY,
-    STATUS_CELL_STYLE,
     MappedRulesProjectionState,
     StatusStyleColor,
     canonical_entities_for_role,
@@ -30,6 +30,7 @@ from streamlit_app.components.mapped_rules.utils import (
     role_requires_mapped_entity,
     rule_rows_for_role,
     sdwan_names_to_text,
+    status_cell_style,
     status_color_for_rule,
 )
 from streamlit_app.services.utils import text
@@ -161,6 +162,7 @@ def _build_policy_pairs(
 
 def _canonical_rule_row(canonical_rule: CanonicalRuleDisplayDTO) -> dict[str, str]:
     return {
+        "priority": str(canonical_rule.priority),
         "name": canonical_rule.name,
         "action": text(canonical_rule.action),
         "src_zone": _canonical_role_text(
@@ -192,6 +194,7 @@ def _mapped_rule_row(
 
     return {
         "id": str(mapped_rule.mapping_scope_rule_id),
+        "priority": str(mapped_rule.priority),
         "name": mapped_rule.name,
         "action": text(mapped_rule.action),
         "status": status_text,
@@ -305,8 +308,8 @@ def _policy_tables_columns_config() -> dict[str, ColumnConfig]:
     return {
         "row_num": st.column_config.NumberColumn("#", width="small", pinned=True),
         "id": None,
-        "priority": None,
         "name": st.column_config.TextColumn("Name", width="medium"),
+        "priority": st.column_config.TextColumn("Priority", width="small"),
         "action": st.column_config.TextColumn("Action", width="small"),
         "enabled": st.column_config.CheckboxColumn("Enabled", width="small"),
         "status": st.column_config.TextColumn("Status", width="medium"),
@@ -331,18 +334,18 @@ def _style_policy_dataframe(
     *,
     role_styles_by_row: list[dict[str, StatusStyleColor]],
     status_styles_by_row: list[StatusStyleColor],
-):
+) -> Styler:
     df.insert(0, "row_num", range(1, len(df) + 1))
 
     def apply_row_style(row: pd.Series) -> list[str]:
         row_index: int = df.index.get_loc(row.name)
         role_styles: dict[str, StatusStyleColor] = role_styles_by_row[row_index]
-        row_status_style = STATUS_CELL_STYLE[status_styles_by_row[row_index]]
+        row_status_style = status_cell_style(status_styles_by_row[row_index])
 
         styles: list[str] = []
         for column in row.index:
             if column in ROLE_BY_COLUMN:
-                styles.append(STATUS_CELL_STYLE[role_styles[column]])
+                styles.append(status_cell_style(role_styles[column]))
             elif column == "status":
                 styles.append(row_status_style)
             else:

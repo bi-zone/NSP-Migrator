@@ -4,11 +4,13 @@ from typing import Any, Protocol, TypeAlias
 from app.integrations.sdwan_csp_api.schemas import (
     AddrObjectResponse,
     ApplyCommitResultResponse,
+    CommitDataResponse,
     CommitEntityDto,
     CPEInfoResponse,
     CreateAddrObjectRequest,
     CreatePolicyRequest,
     DeviceObjectResponse,
+    LoginResponse,
     NetworkResponse,
     PolicyResponse,
     ServiceCreateRequest,
@@ -30,6 +32,13 @@ class SDWANHttpMethod(StrEnum):
 
 
 class ISDWANCspHttpClient(Protocol):
+    async def login(self) -> LoginResponse: ...
+
+    @property
+    def vpc_id(self) -> str: ...
+
+    async def aclose(self) -> None: ...
+
     async def health_check(self) -> None: ...
 
     async def authorized_request(
@@ -41,17 +50,21 @@ class ISDWANCspHttpClient(Protocol):
         json: SDWANCspHttpJsonValue | None = None,
     ) -> SDWANCspHttpJsonValue: ...
 
-    async def get_vpc_id(self) -> str: ...
-
     # -- API methods
-    async def commit_rule_objects(
+    async def commit_full_state(
+        self,
+        commit_name: str,
+        commit_description: str,
+    ) -> int: ...
+
+    async def commit_entities(
         self,
         commit_name: str,
         commit_description: str,
         entities: list[CommitEntityDto],
     ) -> int: ...
 
-    async def get_commit_info(self, commit_id: int) -> dict:
+    async def get_commit_info(self, commit_id: int) -> CommitDataResponse:
         """Get commit info and linked diffs"""
         ...
 
@@ -62,31 +75,33 @@ class ISDWANCspHttpClient(Protocol):
     async def get_zones(
         self,
         ids: list[int] | None = None,
-        limit: int | None = None,
     ) -> list[ZoneResponse]: ...
 
     async def get_services(
         self,
         ids: list[int] | None = None,
-        limit: int | None = None,
     ) -> list[ServiceResponse]: ...
 
     async def get_addr_objects(
         self,
         ids: list[int] | None = None,
+        parents_ids: list[int] | None = None,
+    ) -> list[AddrObjectResponse]: ...
+
+    async def get_addr_objects_list(
+        self,
         limit: int | None = None,
         without_parents: bool = False,
     ) -> list[AddrObjectResponse]: ...
 
-    async def get_addr_objects_by_parents_ids(
+    async def get_addr_objects_by_ids(
         self,
-        parents_ids: list[int],
+        ids: list[int],
     ) -> list[AddrObjectResponse]: ...
 
     async def get_networks(
         self,
         network_ids: list[str] | None = None,
-        limit: int | None = None,
     ) -> list[NetworkResponse]: ...
 
     async def create_addr_objects(

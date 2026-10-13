@@ -9,57 +9,27 @@ from app.modules.imports.cisco_asa.domain.enums import (
     IssueReasonCode,
     ProtocolOperandKind,
 )
-from app.modules.imports.cisco_asa.domain.parsed_config import (
-    ParsedAccessRule,
-    ZoneInferenceStatus,
-)
+from app.modules.imports.cisco_asa.domain.parsed_config import ParsedAccessRule
 from app.modules.trace.domain.enums import TraceCanonicalKind, TraceCanonicalRole
 
 
-def emit_rule_zone_issues(rule: ParsedAccessRule, state: _NormalizerState) -> None:
-    """Emit zone-binding and ACL-usage issues for one parsed rule.
+def emit_rule_usage_issues(rule: ParsedAccessRule, state: _NormalizerState) -> None:
+    """Emit actionable ACL-usage issues for one parsed rule.
 
     Invoked as the first helper in _materialize_rules for every
-    ParsedAccessRule. Issues are informational for migration review; the
-    canonical rule is still created afterward.
+    ParsedAccessRule. The canonical rule is still created afterward.
 
-    Zone branch is mutually exclusive:
-    - GLOBAL_SCOPE -> global_acl_scope_no_interface_zones (not unresolved_zone)
-    - otherwise unresolved binding -> unresolved_zone
-
-    ACL usage checks are independent and may stack with a zone issue.
+    Zone context (global scope / unresolved binding) is intentionally not an
+    issue: it is encoded as skip_reasons in CanonicalRule.description by
+    resolve_rule_processing + build_rule_metadata, and gates auto-apply there.
 
     Side Effects:
-        Appends CanonicalIssue records to state.issues.
+        Appends CanonicalIssue records to state.issues for usage conflicts and
+        crypto-map selectors only.
 
     Stable contracts:
-        issue_code values are asserted in tests/imports/cisco_asa/
+        Issue code values are asserted in tests/imports/cisco_asa/.
     """
-    if rule.zone_inference_status == ZoneInferenceStatus.GLOBAL_SCOPE:
-        state.emit_issue(
-            entity_type="cisco_asa_rule",
-            issue_code="global_acl_scope_no_interface_zones",
-            message=(
-                "Rule is bound to a global ACL; interface zones are not "
-                "directional and require separate SD-WAN zone assignment"
-            ),
-            entity_key=rule.rule_name,
-            source_line_start=rule.line_start,
-            source_line_end=rule.line_end,
-            reason=IssueReasonCode.GLOBAL_SCOPE,
-        )
-    elif rule.unresolved_zone:
-        # Interface-bound ACL where src/dst zones could not be inferred.
-        state.emit_issue(
-            entity_type="cisco_asa_rule",
-            issue_code="unresolved_zone",
-            message="Zone cannot be resolved from ACL binding/name",
-            entity_key=rule.rule_name,
-            source_line_start=rule.line_start,
-            source_line_end=rule.line_end,
-            reason=IssueReasonCode.BINDING_MISSING,
-        )
-
     if rule.acl_usage_type == AclUsageType.CONFLICT:
         state.emit_issue(
             entity_type="cisco_asa_rule",

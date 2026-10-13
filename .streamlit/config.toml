@@ -10,6 +10,59 @@ runOnSave = true
 gatherUsageStats = false
 
 [theme]
+base = "light"
+showSidebarBorder = true
+baseRadius = "medium"
+buttonRadius = "medium"
+
+[theme.light]
 primaryColor = "#0068C9"
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F8F9FA"
+secondaryBackgroundColor = "#F7F8FA"
+textColor = "#1F2937"
+borderColor = "#D0D5DD"
+codeBackgroundColor = "#F2F4F7"
+greenColor = "#16A34A"
+greenBackgroundColor = "#DCFCE7"
+greenTextColor = "#166534"
+yellowColor = "#D97706"
+yellowBackgroundColor = "#FEF3C7"
+yellowTextColor = "#92400E"
+redColor = "#DC2626"
+redBackgroundColor = "#FEE2E2"
+redTextColor = "#991B1B"
+grayColor = "#6B7280"
+grayBackgroundColor = "#F3F4F6"
+grayTextColor = "#374151"
+
+[theme.light.sidebar]
+backgroundColor = "#F8F9FA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1F2937"
+borderColor = "#D0D5DD"
+
+[theme.dark]
+primaryColor = "#64B5FF"
+backgroundColor = "#101828"
+secondaryBackgroundColor = "#1D2939"
+textColor = "#F9FAFB"
+borderColor = "#475467"
+codeBackgroundColor = "#0B1220"
+greenColor = "#4ADE80"
+greenBackgroundColor = "#123D27"
+greenTextColor = "#86EFAC"
+yellowColor = "#FBBF24"
+yellowBackgroundColor = "#4A3508"
+yellowTextColor = "#FDE68A"
+redColor = "#F87171"
+redBackgroundColor = "#4A1D24"
+redTextColor = "#FCA5A5"
+grayColor = "#94A3B8"
+grayBackgroundColor = "#293548"
+grayTextColor = "#CBD5E1"
+
+[theme.dark.sidebar]
+backgroundColor = "#151F2E"
+secondaryBackgroundColor = "#1D2939"
+textColor = "#F9FAFB"
+borderColor = "#475467"

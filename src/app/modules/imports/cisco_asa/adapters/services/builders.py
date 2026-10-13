@@ -8,6 +8,7 @@ from app.modules.imports.cisco_asa.adapters.services.common import (
     ip_protocol_object_key,
     kind_for_protocol,
     service_object_key,
+    service_port_label,
 )
 from app.modules.imports.cisco_asa.domain.parsed_config import ParsedServiceObject
 from app.modules.imports.cisco_asa.parsing.service_catalog import (
@@ -126,7 +127,7 @@ def build_canonical_service_from_payload(
             object_key=object_key,
             object_family=ObjectFamily.SERVICE,
             object_kind=ObjectKind.IP_PROTO,
-            name=f"tcp-udp:{port}-{port}",
+            name=service_port_label("tcp-udp", port, port),
             protocol="tcp-udp",
             port_from=port,
             port_to=port,
@@ -209,7 +210,7 @@ def build_inline_service_from_ref(
     like www or ssh.
 
     Object keys follow service_object_key convention (e.g.
-    service:tcp:80-80 asserted in test_normalizer_fixtures.py).
+    service:tcp:80 asserted in test_normalizer_fixtures.py).
 
     Returns:
         Built object, or None when operand cannot be interpreted (caller
@@ -234,7 +235,7 @@ def build_inline_service_from_ref(
                 object_key=key,
                 object_family=ObjectFamily.SERVICE,
                 object_kind=kind,
-                name=f"{proto}:{p_from}-{p_to}",
+                name=service_port_label(proto, p_from, p_to),
                 protocol=proto,
                 port_from=p_from,
                 port_to=p_to,
@@ -248,7 +249,9 @@ def build_inline_service_from_ref(
                 object_key=key,
                 object_family=ObjectFamily.SERVICE,
                 object_kind=kind_for_protocol(entry.protocol),
-                name=f"{entry.protocol}:{entry.port_from}-{entry.port_to}",
+                name=service_port_label(
+                    entry.protocol, entry.port_from, entry.port_to
+                ),
                 protocol=entry.protocol,
                 port_from=entry.port_from,
                 port_to=entry.port_to,

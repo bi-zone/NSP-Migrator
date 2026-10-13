@@ -1,9 +1,13 @@
 import asyncio
+import atexit
 import threading
 from functools import lru_cache
 from typing import Any
 
 from app.di.container import AppContainer, create_di_container
+from app.modules.canonical.application.use_cases.get_canonical_issues import (
+    GetCanonicalIssuesUseCase,
+)
 from app.modules.canonical.application.use_cases.get_canonical_object import (
     GetCanonicalObjectUseCase,
 )
@@ -31,6 +35,9 @@ from app.modules.imports.application.use_cases.create_import_source import (
 from app.modules.imports.application.use_cases.get_import_vendors import (
     GetImportVendorsUseCase,
 )
+from app.modules.imports.application.use_cases.get_source_artifact import (
+    GetSourceArtifactUseCase,
+)
 from app.modules.imports.application.use_cases.get_source_snapshots import (
     GetSourceSnapshotsUseCase,
 )
@@ -45,6 +52,9 @@ from app.modules.mapping.application.assign_zone_for_scope import (
 )
 from app.modules.mapping.application.auto_select_with_auto_create import (
     AutoSelectEntitiesWithCreateForScopeUseCase,
+)
+from app.modules.mapping.application.discover_allowed_vpcs import (
+    DiscoverAllowedVpcsUseCase,
 )
 from app.modules.mapping.application.get_mapping_entity_result_details import (
     GetMappingEntityResultDetailsUseCase,
@@ -80,6 +90,39 @@ from app.modules.mapping.application.select_entity_with_create_on_sdwan import (
 )
 from app.modules.mapping.application.select_sdwan_entity_directly import (
     SelectSdwanEntityDirectlyUseCase,
+)
+from app.modules.reports.application.use_cases.generate_report_pdf import (
+    GenerateReportPdfUseCase,
+)
+from app.modules.reports.application.use_cases.get_report_headers import (
+    GetReportHeadersUseCase,
+)
+from app.modules.reports.application.use_cases.get_report_rules import (
+    GetReportRulesUseCase,
+)
+from app.modules.settings.csp_profiles.application.change_profile_active_status import (
+    ChangeProfileActiveStatusUseCase,
+)
+from app.modules.settings.csp_profiles.application.check_profile_connection import (
+    TestProfileConnectionUseCase,
+)
+from app.modules.settings.csp_profiles.application.create_profile import (
+    CreateProfileUseCase,
+)
+from app.modules.settings.csp_profiles.application.delete_profile import (
+    DeleteProfileUseCase,
+)
+from app.modules.settings.csp_profiles.application.get_profile import (
+    GetProfileUseCase,
+)
+from app.modules.settings.csp_profiles.application.list_profiles import (
+    ListProfilesUseCase,
+)
+from app.modules.settings.csp_profiles.application.remove_profile_password import (
+    RemoveProfilePasswordUseCase,
+)
+from app.modules.settings.csp_profiles.application.update_profile import (
+    UpdateProfileUseCase,
 )
 from app.modules.trace.application.use_cases.get_trace_by_line_range import (
     GetTraceByLineRangeUseCase,
@@ -143,6 +186,25 @@ def run_async(coro: Any) -> Any:
     return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
 
+def _shutdown_streamlit_resources() -> None:
+    global _STREAMLIT_LOOP
+    loop = _STREAMLIT_LOOP
+    if loop is None or not loop.is_running():
+        return
+    try:
+        future = asyncio.run_coroutine_threadsafe(
+            get_container().integrations().sdwan_client_provider().close_all(),
+            loop,
+        )
+        future.result(timeout=10)
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        _STREAMLIT_LOOP = None
+
+
+atexit.register(_shutdown_streamlit_resources)
+
+
 def get_import_vendors() -> GetImportVendorsUseCase:
     return get_container().imports_module().get_import_vendors_use_case()
 
@@ -159,12 +221,20 @@ def get_source_snapshots() -> GetSourceSnapshotsUseCase:
     return get_container().imports_module().get_source_snapshots_use_case()
 
 
+def get_source_artifact() -> GetSourceArtifactUseCase:
+    return get_container().imports_module().get_source_artifact_use_case()
+
+
 def get_canonical_rule_scope() -> GetCanonicalRuleScopeUseCase:
     return get_container().canonical_module().get_canonical_rule_scope_use_case()
 
 
 def get_canonical_object() -> GetCanonicalObjectUseCase:
     return get_container().canonical_module().get_canonical_object_use_case()
+
+
+def get_canonical_issues() -> GetCanonicalIssuesUseCase:
+    return get_container().canonical_module().get_canonical_issues_use_case()
 
 
 def get_map_canonical_to_sdwan() -> MapCanonicalToSdwanUseCase:
@@ -202,6 +272,7 @@ def get_select_entity_with_create_on_sdwan() -> SelectEntityWithCreateOnSdwanUse
         get_container().mapping_module().select_entity_with_create_on_sdwan_use_case()
     )
 
+
 def get_sdwan_zones() -> GetSdwanZonesUseCase:
     return get_container().mapping_module().get_sdwan_zones_use_case()
 
@@ -232,10 +303,74 @@ def get_sdwan_targets() -> GetSdwanTargetsUseCase:
     return get_container().mapping_module().get_sdwan_targets_use_case()
 
 
+def get_discover_allowed_vpcs() -> DiscoverAllowedVpcsUseCase:
+    return get_container().mapping_module().discover_allowed_vpcs_use_case()
+
+
+def get_report_headers() -> GetReportHeadersUseCase:
+    return get_container().reports_module().get_report_headers_use_case()
+
+
+def get_generate_report_pdf() -> GenerateReportPdfUseCase:
+    return get_container().reports_module().generate_report_pdf_use_case()
+
+
+def get_report_rules() -> GetReportRulesUseCase:
+    return get_container().reports_module().get_report_rules_use_case()
+
+
+def get_csp_profiles() -> ListProfilesUseCase:
+    return get_container().settings_module().csp_profiles().list_profiles_use_case()
+
+
+def get_create_csp_profile() -> CreateProfileUseCase:
+    return get_container().settings_module().csp_profiles().create_profile_use_case()
+
+
+def get_csp_profile() -> GetProfileUseCase:
+    return get_container().settings_module().csp_profiles().get_profile_use_case()
+
+
+def get_update_csp_profile() -> UpdateProfileUseCase:
+    return get_container().settings_module().csp_profiles().update_profile_use_case()
+
+
+def get_delete_csp_profile() -> DeleteProfileUseCase:
+    return get_container().settings_module().csp_profiles().delete_profile_use_case()
+
+
+def get_remove_csp_profile_password() -> RemoveProfilePasswordUseCase:
+    return (
+        get_container()
+        .settings_module()
+        .csp_profiles()
+        .remove_profile_password_use_case()
+    )
+
+
+def get_test_csp_profile_connection() -> TestProfileConnectionUseCase:
+    return (
+        get_container()
+        .settings_module()
+        .csp_profiles()
+        .test_profile_connection_use_case()
+    )
+
+
+def get_change_profile_active_status() -> ChangeProfileActiveStatusUseCase:
+    return (
+        get_container()
+        .settings_module()
+        .csp_profiles()
+        .change_profile_active_status_use_case()
+    )
+
+
 def get_mapping_scope_rules_projection() -> GetMappingScopeRulesProjectionUseCase:
     return (
         get_container().mapping_module().get_mapping_scope_rules_projection_use_case()
     )
+
 
 def get_mapping_entity_result_details() -> GetMappingEntityResultDetailsUseCase:
     return get_container().mapping_module().get_mapping_entity_result_details_use_case()

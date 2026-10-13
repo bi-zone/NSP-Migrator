@@ -1,3 +1,10 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import cast
+from uuid import UUID
+
+from app.integrations.sdwan_csp_api.client_provider import SDWANClientProvider
+from app.integrations.sdwan_csp_api.gateways.catalog import SDWANCatalogGateway
 from app.integrations.sdwan_csp_api.gateways.enums import (
     SdwanAddrObjectType,
     SdwanServiceL4Proto,
@@ -13,12 +20,14 @@ from app.integrations.sdwan_csp_api.gateways.models import (
 from app.integrations.sdwan_csp_api.gateways.ports import SDWANCatalogGatewayPort
 from app.integrations.sdwan_csp_api.interfaces import ISDWANCspHttpClient
 from app.integrations.sdwan_csp_api.schemas import (
+    AllowedVPCResponse,
     CreateAddrObjectFqdnRequestData,
     CreateAddrObjectHostRequestData,
     CreateAddrObjectIpRangeRequestData,
     CreateAddrObjectPrefixRequestData,
     CreateAddrObjectRequest,
     CreateAddrObjectRequestData,
+    IcmpCode,
     ServiceCreateRequest,
     ServiceL4Proto,
     ServicePortRange,
@@ -28,6 +37,7 @@ from app.modules.mapping.ports.gateways import (
     CreateAddrObjectPayload,
     CreateServicePayload,
     MappingSDWANGatewayPort,
+    MappingSDWANGatewayProviderPort,
 )
 
 
@@ -99,14 +109,14 @@ class MappingSDWANGateway(MappingSDWANGatewayPort):
                     if payload.prefix is None:
                         raise ValueError("prefix must be provided for prefix type")
                     request_datas.append(
-                        CreateAddrObjectPrefixRequestData(prefix=payload.prefix)
+                        CreateAddrObjectPrefixRequestData(prefix=str(payload.prefix))
                     )
 
                 case SdwanAddrObjectType.HOST:
                     if payload.host is None:
                         raise ValueError("host must be provided for host type")
                     request_datas.append(
-                        CreateAddrObjectHostRequestData(host=payload.host)
+                        CreateAddrObjectHostRequestData(host=str(payload.host))
                     )
 
                 case SdwanAddrObjectType.FQDN:
@@ -123,8 +133,8 @@ class MappingSDWANGateway(MappingSDWANGatewayPort):
                         )
                     request_datas.append(
                         CreateAddrObjectIpRangeRequestData(
-                            from_=payload.ip_range_from,
-                            to=payload.ip_range_to,
+                            from_=str(payload.ip_range_from),
+                            to=str(payload.ip_range_to),
                         )
                     )
 
@@ -155,10 +165,12 @@ class MappingSDWANGateway(MappingSDWANGatewayPort):
             request_payload = ServiceCreateRequest(
                 name=payload.name,
                 l4_proto=ServiceL4Proto(payload.l4_proto),
-                codes=payload.icmp_codes,
+                codes=cast(list[IcmpCode], payload.icmp_codes),
             )
 
         elif payload.l4_proto in (SdwanServiceL4Proto.TCP, SdwanServiceL4Proto.UDP):
+            if payload.port_start is None or payload.port_end is None:
+                raise ValueError("TCP/UDP service must have port ranges")
             request_payload = ServiceCreateRequest(
                 name=payload.name,
                 l4_proto=ServiceL4Proto(payload.l4_proto),
@@ -191,5 +203,28 @@ class MappingSDWANGateway(MappingSDWANGatewayPort):
     async def get_device_objects(self) -> list[SdwanDeviceObject]:
         return await self.catalog_gateway.get_sdwan_device_objects()
 
-    async def get_device_object(self, dev_obj_id: str) -> SdwanDeviceObject:
+    async def get_device_object(self, dev_obj_id: str) -> SdwanDeviceObject | None:
         return await self.catalog_gateway.get_sdwan_device_object(dev_obj_id)
+
+
+class MappingSDWANGatewayProvider(MappingSDWANGatewayProviderPort):
+    def __init__(self, client_provider: SDWANClientProvider) -> None:
+        self._client_provider = client_provider
+
+    async def discover_vpcs(self, profile_id: UUID) -> list[AllowedVPCResponse]:
+        return await self._client_provider.discover_vpcs(profile_id)
+
+    @asynccontextmanager
+    async def acquire(
+        self,
+        profile_id: UUID,
+        vpc_id: str,
+    ) -> AsyncIterator[MappingSDWANGateway]:
+        async with self._client_provider.acquire(
+            profile_id,
+            vpc_id,
+        ) as client:
+            yield MappingSDWANGateway(
+                sdwan_http_client=client,
+                catalog_gateway=SDWANCatalogGateway(client),
+            )

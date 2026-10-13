@@ -1,11 +1,14 @@
 import re
-from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
-from typing import Any, Protocol, Self, TypeAlias
+from typing import Any, Generic, Protocol, Self, TypeAlias, TypeVar
 
 from app.core.hashers import json_hash
+from app.integrations.sdwan_csp_api.gateways.address_group_resolver import (
+    SDWANAddressGroupLeavesResolver,
+    SDWANAddressGroupResolutionError,
+)
 from app.integrations.sdwan_csp_api.gateways.enums import (
     SdwanAddrObjectType,
     SdwanServiceL4Proto,
@@ -15,8 +18,12 @@ from app.integrations.sdwan_csp_api.gateways.models import (
     SdwanService,
     SdwanZone,
 )
-from app.modules.execute.domain.enums import SdwanRuleAction
-from app.modules.execute.domain.value_objects import RuleBody
+from app.modules.execute.domain.enums import CoverageField, SdwanRuleAction
+from app.modules.execute.domain.value_objects import (
+    CoverageDetail,
+    CoverageValue,
+    RuleBody,
+)
 
 
 class CoverableMatchableObject(Protocol):
@@ -32,7 +39,7 @@ class RuleValueNormalizationError(ValueError):
 
 
 AddressValue: TypeAlias = "AddressSpan | FqdnValue"
-MAX_ADDR_GROUP_NESTING_LEVEL = 3
+CoverableValue = TypeVar("CoverableValue", bound=CoverableMatchableObject)
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -197,6 +204,14 @@ class ServiceValue(CoverableMatchableObject):
 
 
 @dataclass(frozen=True, slots=True)
+class _ResolvedCoverageValue(Generic[CoverableValue]):
+    """Normalized value and the concrete SD-WAN object that provides it."""
+
+    value: CoverableValue
+    evidence: CoverageValue
+
+
+@dataclass(frozen=True, slots=True)
 class NormalizedRuleValues:
     """Rule normalized for exact and coverage comparison."""
 
@@ -219,16 +234,27 @@ class NormalizedRuleValues:
         }
         return json_hash(payload)
 
-    def covers(self, other: Self) -> bool:
-        """Return true when existing SD-WAN values cover planned rule values."""
-        return (
-            self.action == other.action
-            and _str_set_covers(self.src_zones, other.src_zones)
-            and _str_set_covers(self.dst_zones, other.dst_zones)
-            and _values_cover_all(self.src_addresses, other.src_addresses)
-            and _values_cover_all(self.dst_addresses, other.dst_addresses)
-            and _values_cover_all(self.services, other.services)
-        )
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRuleValues:
+    """Normalized rule values with source objects retained for coverage evidence."""
+
+    normalized: NormalizedRuleValues
+    src_addresses: tuple[_ResolvedCoverageValue[AddressValue], ...]
+    dst_addresses: tuple[_ResolvedCoverageValue[AddressValue], ...]
+    services: tuple[_ResolvedCoverageValue[ServiceValue], ...]
+
+    def exact_signature(self) -> str:
+        """Return the signature of the normalized rule values."""
+        return self.normalized.exact_signature()
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageAnalysis:
+    """Result of one existing-to-planned coverage comparison."""
+
+    is_covered: bool
+    details: tuple[CoverageDetail, ...] = ()
 
 
 class RuleValuesResolver:
@@ -250,26 +276,79 @@ class RuleValuesResolver:
         self._services_by_id: dict[int, SdwanService] = {
             int(service.id): service for service in services
         }
-        self._addr_objects_by_id: dict[int, SdwanAddrObject] = {
-            int(addr_obj.id): addr_obj for addr_obj in address_objects
-        }
-
-        self._addr_children_by_parent: dict[int, list[SdwanAddrObject]] = defaultdict(
-            list
+        self._address_group_resolver = SDWANAddressGroupLeavesResolver(
+            address_objects,
         )
-        for addr_obj in address_objects:
-            for parent_id in addr_obj.parents:
-                self._addr_children_by_parent[int(parent_id)].append(addr_obj)
 
-    def normalize_rule(self, rule: RuleBody) -> NormalizedRuleValues:
-        """Normalize planned or existing SD-WAN rule body."""
-        return NormalizedRuleValues(
-            action=self._normalize_action(rule.action),
-            src_zones=self._normalize_zones(rule.src_zones),
-            dst_zones=self._normalize_zones(rule.dst_zones),
-            src_addresses=self._normalize_addresses(rule.src_addr_objects),
-            dst_addresses=self._normalize_addresses(rule.dst_addr_objects),
-            services=self._normalize_services(rule.services),
+    def resolve_rule(self, rule: RuleBody) -> ResolvedRuleValues:
+        """Resolve one rule once for exact comparison and coverage evidence."""
+        src_addresses = self._resolve_address_values(rule.src_addr_objects)
+        dst_addresses = self._resolve_address_values(rule.dst_addr_objects)
+        services = self._resolve_service_values(rule.services)
+
+        return ResolvedRuleValues(
+            normalized=NormalizedRuleValues(
+                action=self._normalize_action(rule.action),
+                src_zones=self._normalize_zones(rule.src_zones),
+                dst_zones=self._normalize_zones(rule.dst_zones),
+                src_addresses=frozenset(item.value for item in src_addresses),
+                dst_addresses=frozenset(item.value for item in dst_addresses),
+                services=frozenset(item.value for item in services),
+            ),
+            src_addresses=src_addresses,
+            dst_addresses=dst_addresses,
+            services=services,
+        )
+
+    def analyze_coverage(
+        self,
+        *,
+        existing: ResolvedRuleValues,
+        planned: ResolvedRuleValues,
+    ) -> CoverageAnalysis:
+        """Determine coverage and return only its strict object-value deltas."""
+        existing_normalized = existing.normalized
+        planned_normalized = planned.normalized
+        if (
+            existing_normalized.action != planned_normalized.action
+            or not _str_set_covers(
+                existing_normalized.src_zones,
+                planned_normalized.src_zones,
+            )
+            or not _str_set_covers(
+                existing_normalized.dst_zones,
+                planned_normalized.dst_zones,
+            )
+        ):
+            return CoverageAnalysis(is_covered=False)
+
+        src_details = self._analyze_values_coverage(
+            field=CoverageField.SRC_ADDR_OBJECTS,
+            existing_values=existing.src_addresses,
+            planned_values=planned.src_addresses,
+        )
+        if src_details is None:
+            return CoverageAnalysis(is_covered=False)
+
+        dst_details = self._analyze_values_coverage(
+            field=CoverageField.DST_ADDR_OBJECTS,
+            existing_values=existing.dst_addresses,
+            planned_values=planned.dst_addresses,
+        )
+        if dst_details is None:
+            return CoverageAnalysis(is_covered=False)
+
+        service_details = self._analyze_values_coverage(
+            field=CoverageField.SERVICES,
+            existing_values=existing.services,
+            planned_values=planned.services,
+        )
+        if service_details is None:
+            return CoverageAnalysis(is_covered=False)
+
+        return CoverageAnalysis(
+            is_covered=True,
+            details=(*src_details, *dst_details, *service_details),
         )
 
     def _normalize_action(self, action: SdwanRuleAction) -> SdwanRuleAction:
@@ -286,80 +365,41 @@ class RuleValuesResolver:
             values.add(_normalize_text(zone.name))
         return frozenset(values)
 
-    def _normalize_addresses(
+    def _resolve_address_values(
         self,
         addr_object_ids: Iterable[int],
-    ) -> frozenset[AddressValue]:
-        values: set[AddressValue] = set()
+    ) -> tuple[_ResolvedCoverageValue[AddressValue], ...]:
+        values: list[_ResolvedCoverageValue[AddressValue]] = []
         for addr_object_id in addr_object_ids:
-            values.update(
-                self._address_values_for_id(
-                    addr_object_id=addr_object_id,
-                    current_group_level=0,
+            try:
+                leaf_objects = self._address_group_resolver.resolve_leaves(
+                    addr_object_id
                 )
-            )
-        return frozenset(values)
+            except SDWANAddressGroupResolutionError as exc:
+                raise RuleValueNormalizationError(str(exc)) from None
 
-    def _address_values_for_id(
+            values.extend(
+                self._resolved_address_value(address_object=address_object)
+                for address_object in leaf_objects
+            )
+        return _distinct_resolved_values(values)
+
+    def _resolved_address_value(
         self,
-        addr_object_id: int,
         *,
-        current_group_level: int,
-    ) -> list[AddressValue]:
-        addr_obj = self._addr_objects_by_id.get(addr_object_id)
-        if not addr_obj:
-            raise RuleValueNormalizationError(
-                f"Unknown address object id: {addr_object_id}"
-            )
-        if addr_obj.type == SdwanAddrObjectType.ADDR_GROUP:
-            return self._address_values_from_group(
-                addr_group_obj=addr_obj,
-                group_level=current_group_level + 1,
-            )
-        return [self._address_value_from_leaf(addr_obj)]
-
-    def _address_values_from_group(
-        self,
-        addr_group_obj: SdwanAddrObject,
-        *,
-        group_level: int,
-    ) -> list[AddressValue]:
-        if group_level > MAX_ADDR_GROUP_NESTING_LEVEL:
-            raise RuleValueNormalizationError(
-                f"Address group nesting level exceeded: "
-                f"group object id={addr_group_obj.id}, "
-                f"group value={addr_group_obj.addr_group}, "
-                f"level={group_level}, "
-                f"max_level={MAX_ADDR_GROUP_NESTING_LEVEL}"
-            )
-
-        group_id = addr_group_obj.addr_group or addr_group_obj.id
-        children: list[SdwanAddrObject] = self._addr_children_by_parent.get(
-            int(group_id), []
+        address_object: SdwanAddrObject,
+    ) -> _ResolvedCoverageValue[AddressValue]:
+        value = self._address_value_from_leaf(address_object)
+        return _ResolvedCoverageValue(
+            value=value,
+            evidence=CoverageValue(
+                object_id=address_object.id,
+                object_name=address_object.name,
+                value=value.display(),
+            ),
         )
-        if not children:
-            raise RuleValueNormalizationError(
-                f"Address group {group_id} has no loaded children"
-            )
 
-        result: list[AddressValue] = []
-        for child in children:
-            if child.id == addr_group_obj.id:
-                continue
-            result.extend(
-                self._address_values_for_id(
-                    addr_object_id=child.id,
-                    current_group_level=group_level,
-                )
-            )
-
-        if not result:
-            raise RuleValueNormalizationError(
-                f"Address group {addr_group_obj.id} has no leaf children"
-            )
-        return result
-
-    def _address_value_from_leaf(self, addr_obj: SdwanAddrObject) -> AddressValue:
+    def _address_value_from_leaf(self, addr_obj: SdwanAddrObject) -> AddressValue:  # noqa
         match addr_obj.type:
             case SdwanAddrObjectType.PREFIX:
                 if addr_obj.prefix is None:
@@ -409,13 +449,66 @@ class RuleValuesResolver:
                     f"Unsupported address object type for value comparison: {addr_obj.type}"
                 )
 
-    def _normalize_services(
-        self, service_ids: Iterable[int]
-    ) -> frozenset[ServiceValue]:
-        values: list[ServiceValue] = []
+    def _resolve_service_values(
+        self,
+        service_ids: Iterable[int],
+    ) -> tuple[_ResolvedCoverageValue[ServiceValue], ...]:
+        values: list[_ResolvedCoverageValue[ServiceValue]] = []
         for service_id in service_ids:
-            values.extend(self._service_values_for_id(int(service_id)))
-        return frozenset(values)
+            service = self._services_by_id.get(int(service_id))
+            if not service:
+                raise RuleValueNormalizationError(f"Unknown service id: {service_id}")
+            for value in self._service_values_for_id(int(service_id)):
+                values.append(
+                    _ResolvedCoverageValue(
+                        value=value,
+                        evidence=CoverageValue(
+                            object_id=int(service.id),
+                            object_name=service.name,
+                            value=value.display(),
+                        ),
+                    )
+                )
+        return _distinct_resolved_values(values)
+
+    @staticmethod
+    def _analyze_values_coverage(
+        *,
+        field: CoverageField,
+        existing_values: tuple[_ResolvedCoverageValue[CoverableValue], ...],
+        planned_values: tuple[_ResolvedCoverageValue[CoverableValue], ...],
+    ) -> tuple[CoverageDetail, ...] | None:
+        if not planned_values:
+            return () if not existing_values else None
+        if not existing_values:
+            return None
+
+        covered_by_existing: dict[CoverageValue, list[CoverageValue]] = {}
+
+        for planned in planned_values:
+            covering = next(
+                (
+                    existing
+                    for existing in existing_values
+                    if existing.value.covers(planned.value)
+                ),
+                None,
+            )
+            if covering is None:
+                return None
+            if covering.value.signature() != planned.value.signature():
+                covered_by_existing.setdefault(covering.evidence, []).append(
+                    planned.evidence
+                )
+
+        return tuple(
+            CoverageDetail(
+                field=field,
+                covering_value=covering_value,
+                covered_values=tuple(covered_values),
+            )
+            for covering_value, covered_values in covered_by_existing.items()
+        )
 
     def _service_values_for_id(self, service_id: int) -> list[ServiceValue]:
         service: SdwanService | None = self._services_by_id.get(service_id)
@@ -461,23 +554,19 @@ def _sorted_signatures(values: Iterable[CoverableMatchableObject]) -> list[Any]:
     return sorted((value.signature() for value in values), key=repr)
 
 
+def _distinct_resolved_values(  # noqa
+    values: Iterable[_ResolvedCoverageValue[CoverableValue]],
+) -> tuple[_ResolvedCoverageValue[CoverableValue], ...]:
+    """Keep the first object for each semantic value used by set comparison."""
+    unique_values: dict[Any, _ResolvedCoverageValue[CoverableValue]] = {}
+    for resolved_value in values:
+        unique_values.setdefault(resolved_value.value.signature(), resolved_value)
+    return tuple(unique_values.values())
+
+
 def _str_set_covers(existing: frozenset[str], target: frozenset[str]) -> bool:
     if not target:
         return not existing
     if not existing:
         return False
     return existing.issuperset(target)
-
-
-def _values_cover_all(
-    existing: frozenset[CoverableMatchableObject],
-    target: frozenset[CoverableMatchableObject],
-) -> bool:
-    if not target:
-        return not existing
-    if not existing:
-        return False
-    return all(
-        any(existing_value.covers(target_value) for existing_value in existing)
-        for target_value in target
-    )

@@ -9,6 +9,8 @@ from app.modules.execute.di.container import ExecuteModuleContainer
 from app.modules.imports.cisco_asa.di.container import CiscoAsaModuleContainer
 from app.modules.imports.di.container import ImportsModuleContainer
 from app.modules.mapping.di.container import MappingModuleContainer
+from app.modules.reports.di.container import ReportsModuleContainer
+from app.modules.settings.di.container import SettingsModuleContainer
 from app.modules.trace.di.container import TraceModuleContainer
 
 
@@ -23,10 +25,15 @@ class AppContainer(DeclarativeContainer):
         config=config,
     )
 
+    settings_module = providers.Container(
+        SettingsModuleContainer,
+        session_factory=infrastructure.session_factory,
+        credentials_config=app_settings.provided.csp_credentials,
+    )
+
     integrations = providers.Container(
         IntegrationsContainer,
-        config=config,
-        infrastructure_container=infrastructure,
+        profiles_uow=settings_module.csp_profiles.uow,
     )
 
     # -- modules containers
@@ -38,17 +45,24 @@ class AppContainer(DeclarativeContainer):
     mapping_module = providers.Container(
         MappingModuleContainer,
         canonical_module=canonical_module,
+        sdwan_client_provider=integrations.sdwan_client_provider,
+        runtime_cache_store=infrastructure.runtime_cache_store,
+    )
+
+    reports_module = providers.Container(
+        ReportsModuleContainer,
         session_factory=infrastructure.session_factory,
-        sdwan_http_client=integrations.sdwan_http_client,
-        catalog_gateway=integrations.sdwan_catalog_gateway,
+        sdwan_client_provider=integrations.sdwan_client_provider,
+        list_profiles_use_case=settings_module.csp_profiles.list_profiles_use_case,
+        get_profile_use_case=settings_module.csp_profiles.get_profile_use_case,
     )
 
     execute_module = providers.Container(
         ExecuteModuleContainer,
         mapping_module=mapping_module,
-        session_factory=infrastructure.session_factory,
-        sdwan_http_client=integrations.sdwan_http_client,
-        catalog_gateway=integrations.sdwan_catalog_gateway,
+        reports_module=reports_module,
+        sdwan_client_provider=integrations.sdwan_client_provider,
+        runtime_cache_store=infrastructure.runtime_cache_store,
     )
 
     imports_module = providers.Container(
